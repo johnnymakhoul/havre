@@ -1,5 +1,7 @@
 # © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
 import os
+import signal
+import faulthandler
 
 import uvicorn
 from dotenv import load_dotenv
@@ -27,6 +29,11 @@ def backwards_compat_env_vars():
 def create_server():
     load_dotenv()
     backwards_compat_env_vars()
+    faulthandler.enable()
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except Exception:
+        pass
     DEFAULT_CONFIG_PATH = "config.yaml"
 
     HaivenLogger.get().logger.info("Starting Haiven...")

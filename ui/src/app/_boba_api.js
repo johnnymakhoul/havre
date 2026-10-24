@@ -244,15 +244,113 @@ export const getApiKeyUsage = async (onSuccess, onError) => {
     },
   });
 
-  if (!response.ok) {
-    const error = new Error(`HTTP error! status: ${response.status}`);
-    if (onError) {
-      onError(error);
-    } else {
-      console.error("Error fetching API key usage:", error);
-    }
-    return;
-  }
   const data = await response.json();
   onSuccess(data);
+};
+
+export const getPocStatus = async (onSuccess, onError) => {
+  try {
+    const response = await fetch("/api/poc/status", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    if (onSuccess) onSuccess(data);
+    return data;
+  } catch (error) {
+    if (onError) onError(error);
+  }
+};
+
+export const executePocSpike = async (payload, onSuccess, onError) => {
+  try {
+    const response = await fetch("/api/poc/execute", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    if (onSuccess) onSuccess(data);
+    return data;
+  } catch (error) {
+    if (onError) onError(error);
+  }
+};
+
+export const executePocSpikeStream = async (payload, onChunk, onFinish, onError) => {
+  try {
+    const response = await fetch("/api/poc/execute?stream=true", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const item = JSON.parse(line.trim());
+          if (item.type === "log") {
+            onChunk(item.message);
+          } else if (item.type === "result") {
+            onFinish(item.data);
+          } else if (item.type === "error") {
+            onError(new Error(item.message));
+          }
+        } catch (e) {
+          onChunk(line);
+        }
+      }
+    }
+  } catch (error) {
+    if (onError) onError(error);
+  }
+};
+
+export const stopPocPreview = async (sandboxId, onSuccess, onError) => {
+  try {
+    const response = await fetch(`/api/poc/preview/${sandboxId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    if (onSuccess) onSuccess(data);
+    return data;
+  } catch (error) {
+    if (onError) onError(error);
+  }
 };

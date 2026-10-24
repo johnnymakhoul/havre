@@ -6,15 +6,20 @@ import {
   RiPushpinLine,
   RiAlertLine,
   RiCheckboxCircleLine,
+  RiPlayCircleLine,
+  RiExternalLinkLine,
+  RiStopCircleLine,
+  RiDownload2Line,
 } from "react-icons/ri";
-import { Button, Progress, Tooltip } from "antd";
+import { Button, Progress, Tooltip, Modal, Spin, Tag, Space, Alert } from "antd";
 import { toast } from "react-toastify";
 import { scenarioToText } from "./_dynamic_data_renderer";
-import React from "react";
+import { executePocSpikeStream, stopPocPreview } from "./_boba_api";
+import React, { useState, useRef, useEffect } from "react";
 
 export default function CardActions({
   featureToggleConfig,
-  scenario,
+  scenario = {},
   onExploreHandler,
   selfReview,
   progress,
@@ -22,6 +27,19 @@ export default function CardActions({
 }) {
   const colorFlamingo = "#f2617aff";
   let review = null;
+
+  const [pocModalVisible, setPocModalVisible] = useState(false);
+  const [pocLoading, setPocLoading] = useState(false);
+  const [pocResult, setPocResult] = useState(null);
+  const [pocLogs, setPocLogs] = useState("");
+  const [isStopping, setIsStopping] = useState(false);
+  const logsContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+    }
+  }, [pocLogs]);
 
   if (selfReview) {
     const firstChar = selfReview.charAt(0);
@@ -59,6 +77,88 @@ export default function CardActions({
     addToPinboard(timestamp, scenarioToText(scenario));
   };
 
+  const isSpikeScenario = Boolean(
+    scenario &&
+      (scenario.title ||
+        scenario.verification_command ||
+        scenario.target_adr ||
+        scenario.hypothesis ||
+        scenario.adr_domain),
+  );
+
+  const handleRunPoc = () => {
+    setPocModalVisible(true);
+    setPocLoading(true);
+    setPocResult(null);
+    setPocLogs("Connecting to E2B Cloud Sandbox...\n");
+
+    const payload = {
+      adr_title: scenario.title || "ADR PoC Spike",
+      adr_content: scenarioToText(scenario),
+      runtime: scenario.runtime || "node",
+      preview_port: 3000,
+      keep_alive_for_preview: true,
+    };
+
+    executePocSpikeStream(
+      payload,
+      (logChunk) => {
+        setPocLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setPocResult(result);
+        setPocLoading(false);
+        if (result && result.logs && result.logs.length > pocLogs.length) {
+          setPocLogs(result.logs);
+        }
+        if (result && result.success) {
+          toast.success("PoC generated and deployed to E2B successfully!");
+        } else {
+          toast.error("PoC execution completed with errors.");
+        }
+      },
+      (err) => {
+        setPocLoading(false);
+        setPocResult({
+          success: false,
+          error: err.message,
+          summary: "Failed to execute PoC spike in E2B sandbox.",
+        });
+        setPocLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`PoC failed: ${err.message}`);
+      },
+    );
+  };
+
+  const handleStopPreview = async () => {
+    if (!pocResult || !pocResult.sandbox_id) return;
+    setIsStopping(true);
+    try {
+      await stopPocPreview(pocResult.sandbox_id);
+      toast.info("Preview sandbox terminated.");
+      setPocResult((prev) => ({
+        ...prev,
+        preview_url: null,
+        stopped: true,
+      }));
+    } catch (err) {
+      toast.error(`Failed to stop preview: ${err.message}`);
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
+  const downloadArchive = () => {
+    if (pocResult && pocResult.archive_base64) {
+      const link = document.createElement("a");
+      link.href = `data:application/zip;base64,${pocResult.archive_base64}`;
+      link.download = `poc_${pocResult.sandbox_id || "spike"}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
   return (
     <div>
       <div className="card-actions-footer">
@@ -67,6 +167,17 @@ export default function CardActions({
             <Tooltip title="Chat with Haiven" key="chat">
               <Button type="link" onClick={() => onExploreHandler(scenario)}>
                 <RiChat2Line fontSize="large" />
+              </Button>
+            </Tooltip>
+          )}
+          {isSpikeScenario && (
+            <Tooltip title="Generate & Deploy PoC Spike (E2B + Pi)" key="poc">
+              <Button
+                type="link"
+                onClick={handleRunPoc}
+                style={{ color: "#1677ff", paddingRight: "4px" }}
+              >
+                <RiPlayCircleLine fontSize="large" />
               </Button>
             </Tooltip>
           )}
@@ -109,6 +220,126 @@ export default function CardActions({
           strokeColor={colorFlamingo}
         />
       )}
+
+      <Modal
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span>ADR PoC Spike Sandbox: {scenario.title || ""}</span>
+            {pocLoading && <Spin size="small" />}
+          </div>
+        }
+        open={pocModalVisible}
+        onCancel={() => setPocModalVisible(false)}
+        footer={null}
+        width={780}
+        destroyOnClose
+      >
+        <div style={{ marginTop: "12px" }}>
+          {pocResult && (
+            <div style={{ marginBottom: "16px" }}>
+              <Tag color={pocResult.success ? "success" : "error"}>
+                {pocResult.success ? "VERIFIED & DEPLOYED" : "EXECUTION FAILED"}
+              </Tag>
+              {pocResult.execution_mode && (
+                <Tag color="blue">{pocResult.execution_mode.toUpperCase()}</Tag>
+              )}
+              {pocResult.sandbox_id && (
+                <Tag>Sandbox: {pocResult.sandbox_id}</Tag>
+              )}
+              <p style={{ marginTop: "8px" }}>
+                <strong>Summary:</strong> {pocResult.summary || (pocResult.success ? "Deployed successfully." : "Execution failed.")}
+              </p>
+            </div>
+          )}
+
+          {pocResult && pocResult.preview_url && !pocResult.stopped && (
+            <Alert
+              message="Live Interactive Preview Ready"
+              description={
+                <div style={{ marginTop: "8px" }}>
+                  <p>Your application is running live inside the E2B microVM.</p>
+                  <Space>
+                    <Button
+                      type="primary"
+                      icon={<RiExternalLinkLine />}
+                      href={pocResult.preview_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Live Preview ({pocResult.preview_url})
+                    </Button>
+                    <Button
+                      danger
+                      icon={<RiStopCircleLine />}
+                      loading={isStopping}
+                      onClick={handleStopPreview}
+                    >
+                      Stop Preview
+                    </Button>
+                  </Space>
+                </div>
+              }
+              type="success"
+              showIcon
+              style={{ marginBottom: "16px" }}
+            />
+          )}
+
+          {pocResult && pocResult.stopped && (
+            <Alert
+              message="Preview Sandbox Stopped"
+              description="The E2B microVM preview was terminated and resources released."
+              type="info"
+              showIcon
+              style={{ marginBottom: "16px" }}
+            />
+          )}
+
+          {pocResult && pocResult.archive_base64 && (
+            <div style={{ marginBottom: "16px" }}>
+              <Button icon={<RiDownload2Line />} onClick={downloadArchive}>
+                Download Codebase (.zip)
+              </Button>
+            </div>
+          )}
+
+          <div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "6px",
+              }}
+            >
+              <h4 style={{ margin: 0 }}>
+                {pocLoading ? "Live Execution Logs:" : "Sandbox & Agent Logs:"}
+              </h4>
+              {pocLoading && (
+                <span style={{ fontSize: "12px", color: "#1677ff" }}>
+                  Streaming output from E2B sandbox...
+                </span>
+              )}
+            </div>
+            <pre
+              ref={logsContainerRef}
+              style={{
+                backgroundColor: "#1e1e1e",
+                color: "#68d391",
+                padding: "12px",
+                borderRadius: "6px",
+                maxHeight: "320px",
+                overflowY: "auto",
+                fontSize: "12px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {pocLogs || "Starting execution..."}
+            </pre>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
