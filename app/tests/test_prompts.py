@@ -803,11 +803,47 @@ def test_adr_prompts_and_flows():
             f["identifier"]
             for f in prompt_list.get_follow_ups("adr-cards-4f8a1c6e")
         ]
+        assert "adr-poc-spike-spec-3e0a5f2b" in adr_follow_ups
         assert "adr-madr-spec-5a9b2d7f" in adr_follow_ups
         assert "schedule-roadmap-report-7c2e4f9a" in adr_follow_ups
         assert "cost-analysis-tco-report-6f9d4a2b" in adr_follow_ups
         assert "togaf-gap-analysis-9d4a2b3e" in adr_follow_ups
         assert "requirements-constraints-volere-spec-8f9e1d2c" in adr_follow_ups
+
+        # Step 3: ADR PoC Spike cards prompt
+        spike_cards = prompt_list.get("adr-poc-spike-cards-2f9b4e1a")
+        assert spike_cards is not None
+        assert spike_cards.metadata["title"] == "ADR PoC & Spike Scenarios"
+        assert spike_cards.metadata["categories"] == ["architecture"]
+        assert spike_cards.metadata["type"] == "cards"
+        assert spike_cards.metadata["editable"] is True
+        assert prompt_list.produces_json_output("adr-poc-spike-cards-2f9b4e1a")
+
+        rendered_spike_cards, template_spike_cards = prompt_list.render_prompt(
+            "adr-poc-spike-cards-2f9b4e1a",
+            "Validate CRDT offline sync vs Operational Transformation under network partition.",
+            {"context": "Field sales mobile app"},
+        )
+        assert "context" in template_spike_cards.input_variables
+        assert "user_input" in template_spike_cards.input_variables
+        assert "Field sales mobile app" in rendered_spike_cards
+        assert "CRDT offline sync" in rendered_spike_cards
+        assert "verification_command" in rendered_spike_cards
+
+        # Step 4: ADR PoC Spike spec prompt
+        spike_spec = prompt_list.get("adr-poc-spike-spec-3e0a5f2b")
+        assert spike_spec is not None
+        assert spike_spec.metadata["title"] == "ADR PoC Spike Specification & Code Generator"
+        assert spike_spec.metadata["type"] == "chat"
+        assert spike_spec.metadata["show"] is False
+
+        # Verify follow-ups from Spike cards
+        spike_follow_ups = [
+            f["identifier"]
+            for f in prompt_list.get_follow_ups("adr-poc-spike-cards-2f9b4e1a")
+        ]
+        assert "adr-poc-spike-spec-3e0a5f2b" in spike_follow_ups
+        assert "adr-madr-spec-5a9b2d7f" in spike_follow_ups
 
 
 def test_schedule_estimation_prompts_and_flows():

@@ -1,7 +1,7 @@
 # © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
 import copy
 import os
-from typing import List
+from typing import List, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -276,6 +276,19 @@ class ConfigService:
     def is_api_key_auth_enabled(self) -> bool:
         """Check if API key authentication is enabled via feature toggle."""
         return os.getenv("API_KEY_AUTH_ENABLED", "false").lower() == "true"
+
+    def get_e2b_api_key(self) -> Optional[str]:
+        """Load E2B API key from environment variable or config."""
+        return os.environ.get("E2B_API_KEY") or self.data.get("e2b", {}).get("api_key")
+
+    def get_gemini_api_key(self) -> Optional[str]:
+        """Load Gemini / Google API key from environment variable or config."""
+        return (
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or self.data.get("gemini", {}).get("api_key")
+            or self.data.get("google", {}).get("api_key")
+        )
 
     def load_data_persistence_path(self) -> str:
         """Load the file path for persistent workspace data."""

@@ -66,6 +66,7 @@
 - firstStep:
     identifier: adr-cards-4f8a1c6e
   followUps:
+    - identifier: adr-poc-spike-spec-3e0a5f2b
     - identifier: adr-madr-spec-5a9b2d7f
     - identifier: project-objectives-spec-2e5b8d3a
     - identifier: nfr-architecture-characteristics-spec-4f8b1d3e
@@ -74,6 +75,15 @@
     - identifier: schedule-roadmap-report-7c2e4f9a
     - identifier: cost-analysis-tco-report-6f9d4a2b
     - identifier: togaf-gap-analysis-9d4a2b3e
+    - identifier: requirements-constraints-volere-spec-8f9e1d2c
+    - identifier: software-specification-detailed-study-7c3d1f5b
+- firstStep:
+    identifier: adr-poc-spike-cards-2f9b4e1a
+  followUps:
+    - identifier: adr-poc-spike-spec-3e0a5f2b
+    - identifier: adr-madr-spec-5a9b2d7f
+    - identifier: project-objectives-spec-2e5b8d3a
+    - identifier: nfr-architecture-characteristics-spec-4f8b1d3e
     - identifier: requirements-constraints-volere-spec-8f9e1d2c
     - identifier: software-specification-detailed-study-7c3d1f5b
 - firstStep:
