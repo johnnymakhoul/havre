@@ -703,7 +703,9 @@ describe("Sidebar Component", () => {
       });
 
       await act(async () => {
-        render(<Sidebar prompts={objectivesPrompts} featureToggleConfig={{}} />);
+        render(
+          <Sidebar prompts={objectivesPrompts} featureToggleConfig={{}} />,
+        );
       });
 
       const analyseCategory = screen.getByText(/Analyse/i);
@@ -743,7 +745,9 @@ describe("Sidebar Component", () => {
         specCategory.click();
       });
 
-      const specLinks = screen.getAllByText("Software Specification & Workflows");
+      const specLinks = screen.getAllByText(
+        "Software Specification & Workflows",
+      );
       expect(specLinks.length).toBeGreaterThanOrEqual(1);
       expect(specLinks[0].closest("a").getAttribute("href")).toBe(
         "/cards?prompt=software-specification-workflow-cards-9a4b2c1e",
@@ -839,7 +843,9 @@ describe("Sidebar Component", () => {
         specCategory.click();
       });
 
-      const wbsLinks = screen.getAllByText("Detailed Work Breakdown Structure (WBS)");
+      const wbsLinks = screen.getAllByText(
+        "Detailed Work Breakdown Structure (WBS)",
+      );
       expect(wbsLinks.length).toBeGreaterThanOrEqual(1);
       expect(wbsLinks[0].closest("a").getAttribute("href")).toBe(
         "/cards?prompt=work-breakdown-structure-cards-7f1a5e3c",
@@ -871,7 +877,9 @@ describe("Sidebar Component", () => {
         pmCategory.click();
       });
 
-      const qaLinks = screen.getAllByText("Quality Assurance: Risk Matrix & Mitigation");
+      const qaLinks = screen.getAllByText(
+        "Quality Assurance: Risk Matrix & Mitigation",
+      );
       expect(qaLinks.length).toBeGreaterThanOrEqual(1);
       expect(qaLinks[0].closest("a").getAttribute("href")).toBe(
         "/cards?prompt=quality-assurance-risk-matrix-cards-5b8e2a1d",
@@ -908,6 +916,50 @@ describe("Sidebar Component", () => {
       expect(cmLinks[0].closest("a").getAttribute("href")).toBe(
         "/cards?prompt=change-management-cards-7d0a4c3f",
       );
+    });
+
+    it("should render ADR Implementation Code Generation under Coding and Architecture", async () => {
+      const codegenPrompts = [
+        {
+          identifier: "adr-code-generation-cards-5c8e2a1f",
+          title: "ADR Implementation Code Generation",
+          categories: ["coding", "architecture"],
+          type: "cards",
+          show: true,
+        },
+      ];
+
+      useRouter.mockReturnValue({
+        pathname: "/",
+      });
+
+      await act(async () => {
+        render(<Sidebar prompts={codegenPrompts} featureToggleConfig={{}} />);
+      });
+
+      expect(screen.getByText(/Coding/i)).toBeInTheDocument();
+      const codingCategory = screen.getByText(/Coding/i);
+      await act(async () => {
+        codingCategory.click();
+      });
+
+      const codegenLinks = screen.getAllByText(
+        "ADR Implementation Code Generation",
+      );
+      expect(codegenLinks.length).toBeGreaterThanOrEqual(1);
+      expect(codegenLinks[0].closest("a").getAttribute("href")).toBe(
+        "/cards?prompt=adr-code-generation-cards-5c8e2a1f",
+      );
+
+      const architectureCategory = screen.getByText(/Architecture/i);
+      await act(async () => {
+        architectureCategory.click();
+      });
+
+      const archLinks = screen.getAllByText(
+        "ADR Implementation Code Generation",
+      );
+      expect(archLinks.length).toBeGreaterThanOrEqual(1);
     });
   });
 

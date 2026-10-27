@@ -803,6 +803,7 @@ def test_adr_prompts_and_flows():
             f["identifier"]
             for f in prompt_list.get_follow_ups("adr-cards-4f8a1c6e")
         ]
+        assert "adr-code-generation-spec-8b3d6a2e" in adr_follow_ups
         assert "adr-poc-spike-spec-3e0a5f2b" in adr_follow_ups
         assert "adr-madr-spec-5a9b2d7f" in adr_follow_ups
         assert "schedule-roadmap-report-7c2e4f9a" in adr_follow_ups
@@ -842,8 +843,60 @@ def test_adr_prompts_and_flows():
             f["identifier"]
             for f in prompt_list.get_follow_ups("adr-poc-spike-cards-2f9b4e1a")
         ]
+        assert "adr-code-generation-spec-8b3d6a2e" in spike_follow_ups
         assert "adr-poc-spike-spec-3e0a5f2b" in spike_follow_ups
         assert "adr-madr-spec-5a9b2d7f" in spike_follow_ups
+
+        # Step 5: ADR Implementation Code Generation cards prompt
+        codegen_cards = prompt_list.get("adr-code-generation-cards-5c8e2a1f")
+        assert codegen_cards is not None
+        assert codegen_cards.metadata["title"] == "ADR Implementation Code Generation"
+        assert codegen_cards.metadata["categories"] == ["coding", "architecture"]
+        assert codegen_cards.metadata["type"] == "cards"
+        assert codegen_cards.metadata["editable"] is True
+        assert prompt_list.produces_json_output("adr-code-generation-cards-5c8e2a1f")
+
+        rendered_codegen_cards, template_codegen_cards = prompt_list.render_prompt(
+            "adr-code-generation-cards-5c8e2a1f",
+            "Implement production CRDT sync module and local IndexedDB persistence adapter.",
+            {"context": "Offline-First Mobile Sales Platform"},
+        )
+        assert "context" in template_codegen_cards.input_variables
+        assert "user_input" in template_codegen_cards.input_variables
+        assert "Offline-First Mobile Sales Platform" in rendered_codegen_cards
+        assert "production CRDT sync module" in rendered_codegen_cards
+        assert "module_type" in rendered_codegen_cards
+        assert "target_files" in rendered_codegen_cards
+        assert "**Implementation Scope & Architectural Role**" in rendered_codegen_cards
+        assert "**Domain & Technical Design**" in rendered_codegen_cards
+        assert "**Production Quality & NFRs**" in rendered_codegen_cards
+        assert "**Verification & Test Strategy**" in rendered_codegen_cards
+        assert "self-review" in rendered_codegen_cards
+
+        # Step 6: ADR Production Code Generator spec prompt
+        codegen_spec = prompt_list.get("adr-code-generation-spec-8b3d6a2e")
+        assert codegen_spec is not None
+        assert (
+            codegen_spec.metadata["title"]
+            == "ADR Production Code Generator & Implementation Specification"
+        )
+        assert codegen_spec.metadata["type"] == "chat"
+        assert codegen_spec.metadata["show"] is False
+        assert codegen_spec.metadata["categories"] == ["coding", "architecture"]
+        assert codegen_spec.metadata["editable"] is True
+
+        # Verify follow-ups from Code Generation cards
+        codegen_follow_ups = [
+            f["identifier"]
+            for f in prompt_list.get_follow_ups("adr-code-generation-cards-5c8e2a1f")
+        ]
+        assert "adr-code-generation-spec-8b3d6a2e" in codegen_follow_ups
+        assert "adr-poc-spike-spec-3e0a5f2b" in codegen_follow_ups
+        assert "adr-madr-spec-5a9b2d7f" in codegen_follow_ups
+        assert "quality-assurance-risk-matrix-spec-6c9f3b2e" in codegen_follow_ups
+        assert "work-breakdown-structure-spec-8a2b6f4d" in codegen_follow_ups
+        assert "schedule-roadmap-report-7c2e4f9a" in codegen_follow_ups
+        assert "software-specification-detailed-study-7c3d1f5b" in codegen_follow_ups
 
 
 def test_schedule_estimation_prompts_and_flows():

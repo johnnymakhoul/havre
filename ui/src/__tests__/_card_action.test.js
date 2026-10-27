@@ -24,4 +24,32 @@ describe("CardActions", () => {
     expect(progress).toBeInTheDocument();
     expect(progress).toHaveAttribute("aria-valuenow", "42");
   });
+
+  it("renders implementation play button with correct tooltip for IMPL card", () => {
+    const implScenario = {
+      title: "IMPL-001: Core CRDT Domain Model",
+      target_adr: "ADR-001: Offline Sync",
+      module_type: "Core Domain",
+      target_files: ["src/domain/crdt.ts"],
+    };
+    render(<CardActions {...baseProps} scenario={implScenario} />);
+    const button = screen.getByRole("button", {
+      name: /Generate & Deploy Implementation/i,
+    });
+    expect(button).toBeInTheDocument();
+  });
+
+  it("renders spike play button for spike card", () => {
+    const spikeScenario = {
+      title: "SPIKE-001: CRDT Latency Benchmark",
+      target_adr: "ADR-001: Offline Sync",
+      verification_command: "python -m unittest test_main.py",
+      runtime: "python",
+    };
+    render(<CardActions {...baseProps} scenario={spikeScenario} />);
+    const button = screen.getByRole("button", {
+      name: /Generate & Deploy PoC Spike/i,
+    });
+    expect(button).toBeInTheDocument();
+  });
 });

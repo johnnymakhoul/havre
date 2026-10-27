@@ -11,7 +11,16 @@ import {
   RiStopCircleLine,
   RiDownload2Line,
 } from "react-icons/ri";
-import { Button, Progress, Tooltip, Modal, Spin, Tag, Space, Alert } from "antd";
+import {
+  Button,
+  Progress,
+  Tooltip,
+  Modal,
+  Spin,
+  Tag,
+  Space,
+  Alert,
+} from "antd";
 import { toast } from "react-toastify";
 import { scenarioToText } from "./_dynamic_data_renderer";
 import { executePocSpikeStream, stopPocPreview } from "./_boba_api";
@@ -37,7 +46,8 @@ export default function CardActions({
 
   useEffect(() => {
     if (logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+      logsContainerRef.current.scrollTop =
+        logsContainerRef.current.scrollHeight;
     }
   }, [pocLogs]);
 
@@ -77,13 +87,23 @@ export default function CardActions({
     addToPinboard(timestamp, scenarioToText(scenario));
   };
 
-  const isSpikeScenario = Boolean(
+  const isImplementationCard = Boolean(
     scenario &&
-      (scenario.title ||
-        scenario.verification_command ||
-        scenario.target_adr ||
-        scenario.hypothesis ||
-        scenario.adr_domain),
+    (scenario.module_type ||
+      scenario.target_files ||
+      (typeof scenario.title === "string" &&
+        scenario.title.startsWith("IMPL-"))),
+  );
+
+  const isExecutableScenario = Boolean(
+    scenario &&
+    (scenario.title ||
+      scenario.verification_command ||
+      scenario.target_adr ||
+      scenario.hypothesis ||
+      scenario.adr_domain ||
+      scenario.module_type ||
+      scenario.target_files),
   );
 
   const handleRunPoc = () => {
@@ -92,10 +112,20 @@ export default function CardActions({
     setPocResult(null);
     setPocLogs("Connecting to E2B Cloud Sandbox...\n");
 
+    const runtime =
+      scenario.runtime ||
+      (scenario.runtime_or_language &&
+      scenario.runtime_or_language.toLowerCase().includes("python")
+        ? "python"
+        : "node") ||
+      "node";
+
     const payload = {
-      adr_title: scenario.title || "ADR PoC Spike",
+      adr_title:
+        scenario.title ||
+        (isImplementationCard ? "ADR Implementation" : "ADR PoC Spike"),
       adr_content: scenarioToText(scenario),
-      runtime: scenario.runtime || "node",
+      runtime: runtime,
       preview_port: 3000,
       keep_alive_for_preview: true,
     };
@@ -112,9 +142,17 @@ export default function CardActions({
           setPocLogs(result.logs);
         }
         if (result && result.success) {
-          toast.success("PoC generated and deployed to E2B successfully!");
+          toast.success(
+            isImplementationCard
+              ? "Implementation generated and deployed to E2B successfully!"
+              : "PoC generated and deployed to E2B successfully!",
+          );
         } else {
-          toast.error("PoC execution completed with errors.");
+          toast.error(
+            isImplementationCard
+              ? "Implementation execution completed with errors."
+              : "PoC execution completed with errors.",
+          );
         }
       },
       (err) => {
@@ -170,10 +208,22 @@ export default function CardActions({
               </Button>
             </Tooltip>
           )}
-          {isSpikeScenario && (
-            <Tooltip title="Generate & Deploy PoC Spike (E2B + Pi)" key="poc">
+          {isExecutableScenario && (
+            <Tooltip
+              title={
+                isImplementationCard
+                  ? "Generate & Deploy Implementation (E2B + Pi)"
+                  : "Generate & Deploy PoC Spike (E2B + Pi)"
+              }
+              key="poc"
+            >
               <Button
                 type="link"
+                aria-label={
+                  isImplementationCard
+                    ? "Generate & Deploy Implementation"
+                    : "Generate & Deploy PoC Spike"
+                }
                 onClick={handleRunPoc}
                 style={{ color: "#1677ff", paddingRight: "4px" }}
               >
@@ -224,7 +274,12 @@ export default function CardActions({
       <Modal
         title={
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span>ADR PoC Spike Sandbox: {scenario.title || ""}</span>
+            <span>
+              {isImplementationCard
+                ? "ADR Implementation Sandbox: "
+                : "ADR PoC Spike Sandbox: "}
+              {scenario.title || ""}
+            </span>
             {pocLoading && <Spin size="small" />}
           </div>
         }
@@ -247,7 +302,11 @@ export default function CardActions({
                 <Tag>Sandbox: {pocResult.sandbox_id}</Tag>
               )}
               <p style={{ marginTop: "8px" }}>
-                <strong>Summary:</strong> {pocResult.summary || (pocResult.success ? "Deployed successfully." : "Execution failed.")}
+                <strong>Summary:</strong>{" "}
+                {pocResult.summary ||
+                  (pocResult.success
+                    ? "Deployed successfully."
+                    : "Execution failed.")}
               </p>
             </div>
           )}
@@ -257,7 +316,9 @@ export default function CardActions({
               message="Live Interactive Preview Ready"
               description={
                 <div style={{ marginTop: "8px" }}>
-                  <p>Your application is running live inside the E2B microVM.</p>
+                  <p>
+                    Your application is running live inside the E2B microVM.
+                  </p>
                   <Space>
                     <Button
                       type="primary"
