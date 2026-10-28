@@ -271,6 +271,12 @@ const CardsChat = ({
       resetChatSession();
     }
 
+    const baseScenarios = shouldReset
+      ? []
+      : scenarios.map((scenario) => ({
+          ...scenario,
+        }));
+
     const uri = "/api/prompt";
 
     let ms = "";
@@ -290,6 +296,10 @@ const CardsChat = ({
           abortLoad();
         },
         onFinish: () => {
+          const currentPromptId =
+            selectedPromptId ||
+            selectedPromptConfiguration?.identifier ||
+            promptId;
           if (
             ms == "" ||
             (!Array.isArray(output) && !hasShownInvalidResponseWarning)
@@ -297,23 +307,15 @@ const CardsChat = ({
             toast.warning(
               "Model failed to respond rightly, please rewrite your message and try again",
             );
-          } else if (Array.isArray(output) && selectedPromptId) {
-            const finalCards = shouldReset
-              ? output
-              : [...existingScenarios, ...output];
-            saveProjectCards(selectedPromptId, finalCards);
+          } else if (Array.isArray(output) && currentPromptId) {
+            const finalCards = [...baseScenarios, ...output];
+            saveProjectCards(currentPromptId, finalCards);
           }
           abortLoad();
         },
         onMessageHandle: (data, response) => {
           const chatId = response.headers.get("X-Chat-ID");
           setChatSessionIdCardBuilding(chatId);
-
-          const existingScenarios = shouldReset
-            ? []
-            : scenarios.map((scenario) => ({
-                ...scenario,
-              }));
 
           // --- NEW: Use filterSSEEvents for all string chunks ---
           if (typeof data === "string") {
@@ -347,7 +349,7 @@ const CardsChat = ({
               console.log("error", error);
             }
             if (Array.isArray(output)) {
-              setScenarios([...existingScenarios, ...output]);
+              setScenarios([...baseScenarios, ...output]);
             } else {
               hasShownInvalidResponseWarning = true;
               abortLoad();
@@ -664,8 +666,10 @@ const CardsChat = ({
 
   const updateScenariosAndPersist = (newScenarios) => {
     setScenarios(newScenarios);
-    if (selectedPromptId && Array.isArray(newScenarios)) {
-      saveProjectCards(selectedPromptId, newScenarios);
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
+    if (currentPromptId && Array.isArray(newScenarios)) {
+      saveProjectCards(currentPromptId, newScenarios);
     }
   };
 
