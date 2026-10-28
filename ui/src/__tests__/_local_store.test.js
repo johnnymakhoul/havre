@@ -16,6 +16,9 @@ import {
   deleteProject,
   hydrateFromBackend,
   DEFAULT_PROJECT_SECTIONS,
+  getProjectCards,
+  saveProjectCards,
+  deleteProjectCards,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -505,6 +508,83 @@ describe("Local Store", () => {
       expect(getActiveProject().name).toBe("Server Project");
       expect(getPinboardData()[0].summary).toBe("Server pinned note");
       expect(getSortedUserContexts()[0].title).toBe("Server Context");
+
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe("Cards management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return empty array when no cards exist for prompt", () => {
+      expect(getProjectCards("prompt-1")).toEqual([]);
+    });
+
+    it("should save cards and retrieve them by prompt and project", () => {
+      const cards = [
+        { title: "Candidate A", summary: "Modular Monolith" },
+        { title: "Candidate B", summary: "Microservices" },
+      ];
+
+      saveProjectCards("prompt-1", cards);
+
+      const retrieved = getProjectCards("prompt-1");
+      expect(retrieved).toHaveLength(2);
+      expect(retrieved[0].title).toBe("Candidate A");
+    });
+
+    it("should isolate cards between different projects", () => {
+      saveProjectCards("prompt-1", [{ title: "Default Card" }], "default");
+      saveProjectCards("prompt-1", [{ title: "Proj 2 Card" }], "project-2");
+
+      expect(getProjectCards("prompt-1", "default")[0].title).toBe("Default Card");
+      expect(getProjectCards("prompt-1", "project-2")[0].title).toBe("Proj 2 Card");
+    });
+
+    it("should delete cards for a specific prompt", () => {
+      saveProjectCards("prompt-1", [{ title: "Card 1" }]);
+      saveProjectCards("prompt-2", [{ title: "Card 2" }]);
+
+      deleteProjectCards("prompt-1");
+
+      expect(getProjectCards("prompt-1")).toEqual([]);
+      expect(getProjectCards("prompt-2")).toHaveLength(1);
+    });
+
+    it("should hydrate cards from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {
+          default: {
+            "prompt-arch": [{ title: "Hydrated Card", summary: "From server" }],
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const cards = getProjectCards("prompt-arch", "default");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].title).toBe("Hydrated Card");
 
       fetchSpy.mockRestore();
     });

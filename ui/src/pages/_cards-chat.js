@@ -22,6 +22,8 @@ import {
   addToPinboard,
   getSortedUserContexts,
   getSummaryForTheUserContext,
+  getProjectCards,
+  saveProjectCards,
 } from "../app/_local_store";
 import LLMTokenUsage from "../app/_llm_token_usage";
 import PromptPreview from "../app/_prompt_preview";
@@ -118,6 +120,13 @@ const CardsChat = ({
         setSelectedPromptConfiguration(firstStepEntry);
       }
       combineAllContexts(contexts);
+      const existingCards = getProjectCards(selectedPromptId);
+      if (Array.isArray(existingCards) && existingCards.length > 0) {
+        setScenarios(existingCards);
+        setIsInputCollapsed(true);
+      } else {
+        setScenarios([]);
+      }
     }
     setUsePromptId(true);
 
@@ -128,10 +137,23 @@ const CardsChat = ({
       combineAllContexts(contexts);
     };
 
+    const handleProjectChange = () => {
+      combineAllContexts(contexts);
+      if (selectedPromptId) {
+        const projectCards = getProjectCards(selectedPromptId);
+        setScenarios(Array.isArray(projectCards) ? projectCards : []);
+        if (Array.isArray(projectCards) && projectCards.length > 0) {
+          setIsInputCollapsed(true);
+        }
+      }
+    };
+
     window.addEventListener("update-context", handleStorageChange);
+    window.addEventListener("update-project", handleProjectChange);
 
     return () => {
       window.removeEventListener("update-context", handleStorageChange);
+      window.removeEventListener("update-project", handleProjectChange);
     };
   }, [promptId, prompts]);
 
@@ -275,6 +297,11 @@ const CardsChat = ({
             toast.warning(
               "Model failed to respond rightly, please rewrite your message and try again",
             );
+          } else if (Array.isArray(output) && selectedPromptId) {
+            const finalCards = shouldReset
+              ? output
+              : [...existingScenarios, ...output];
+            saveProjectCards(selectedPromptId, finalCards);
           }
           abortLoad();
         },
@@ -635,23 +662,30 @@ const CardsChat = ({
     </div>
   );
 
+  const updateScenariosAndPersist = (newScenarios) => {
+    setScenarios(newScenarios);
+    if (selectedPromptId && Array.isArray(newScenarios)) {
+      saveProjectCards(selectedPromptId, newScenarios);
+    }
+  };
+
   const onDeleteCard = (index) => {
+    let updatedScenarios;
     if (index.section !== undefined) {
       if (index.card !== undefined) {
         scenarios[index.section].scenarios = scenarios[
           index.section
         ].scenarios.filter((_, i) => i !== index.card);
-        setScenarios([...scenarios]);
+        updatedScenarios = [...scenarios];
       } else {
-        const updatedScenarios = scenarios.filter(
+        updatedScenarios = scenarios.filter(
           (_, i) => i !== index.section,
         );
-        setScenarios(updatedScenarios);
       }
     } else {
-      const updatedScenarios = scenarios.filter((_, i) => i !== index.card);
-      setScenarios(updatedScenarios);
+      updatedScenarios = scenarios.filter((_, i) => i !== index.card);
     }
+    updateScenariosAndPersist(updatedScenarios);
   };
 
   const perplexityModelName = { chat: { name: "Perplexity AI" } };
@@ -692,7 +726,7 @@ const CardsChat = ({
                 isGenerating={isGenerating}
                 featureToggleConfig={featureToggleConfig}
                 scenarios={scenarios}
-                setScenarios={setScenarios}
+                setScenarios={updateScenariosAndPersist}
                 editable={selectedPromptConfiguration.editable}
                 onExplore={onExplore}
                 stopLoadComponent={<StopLoad />}
@@ -718,7 +752,7 @@ const CardsChat = ({
                   featureToggleConfig={featureToggleConfig}
                   chatSessionIdCardBuilding={chatSessionIdCardBuilding}
                   scenarios={scenarios}
-                  setScenarios={setScenarios}
+                  setScenarios={updateScenariosAndPersist}
                   selectedPromptConfiguration={selectedPromptConfiguration}
                   setEnableGenerateMoreCards={setEnableGenerateMoreCards}
                   setIsGenerating={setIsGenerating}

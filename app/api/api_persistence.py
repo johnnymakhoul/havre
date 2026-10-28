@@ -41,6 +41,25 @@ class StateSyncRequest(BaseModel):
     activeProjectId: Optional[str] = None
     pinboard: Optional[Dict[str, Any]] = None
     contexts: Optional[Dict[str, Any]] = None
+    cards: Optional[Dict[str, Any]] = None
+
+
+class SaveCardsRequest(BaseModel):
+    promptId: Optional[str] = None
+    prompt_id: Optional[str] = None
+    cards: List[Dict[str, Any]] = []
+
+    def get_prompt_id(self) -> str:
+        return self.promptId or self.prompt_id or "default"
+
+
+class AddCardRequest(BaseModel):
+    promptId: Optional[str] = None
+    prompt_id: Optional[str] = None
+    card: Dict[str, Any]
+
+    def get_prompt_id(self) -> str:
+        return self.promptId or self.prompt_id or "default"
 
 
 class ApiPersistence:
@@ -142,3 +161,86 @@ class ApiPersistence:
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
             return session
+
+        @self.app.get("/api/projects/{project_id}/cards")
+        def get_project_cards(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_cards(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+
+        @self.app.post("/api/projects/{project_id}/cards")
+        def save_project_cards(project_id: str, request: SaveCardsRequest):
+            return self.data_repository.save_cards(
+                project_id=project_id,
+                prompt_id=request.get_prompt_id(),
+                cards=request.cards,
+            )
+
+        @self.app.post("/api/projects/{project_id}/card")
+        def add_project_card(project_id: str, request: AddCardRequest):
+            return self.data_repository.add_card(
+                project_id=project_id,
+                prompt_id=request.get_prompt_id(),
+                card=request.card,
+            )
+
+        @self.app.delete("/api/projects/{project_id}/cards")
+        def delete_project_cards(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_cards(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+            return {"deleted": deleted}
+
+        @self.app.delete("/api/projects/{project_id}/cards/{card_id}")
+        def delete_project_card(
+            project_id: str,
+            card_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId or "default"
+            deleted = self.data_repository.delete_card(
+                project_id=project_id, prompt_id=resolved_prompt, card_id=card_id
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/cards")
+        def get_active_project_cards(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_cards(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+
+        @self.app.post("/api/cards")
+        def save_active_project_cards(request: SaveCardsRequest):
+            return self.data_repository.save_cards(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=request.get_prompt_id(),
+                cards=request.cards,
+            )
+
+        @self.app.delete("/api/cards")
+        def delete_active_project_cards(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_cards(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+            return {"deleted": deleted}

@@ -47,6 +47,14 @@ def test_data_repository_persists_across_instances():
             category="research",
             messages=[{"role": "HaivenHumanMessage", "content": "Hello"}],
         )
+        repo1.save_cards(
+            project_id="project-100",
+            prompt_id="software-arch",
+            cards=[
+                {"title": "Modular Monolith", "summary": "Clean arch in single deployable"},
+                {"title": "Microservices", "summary": "Decoupled domain services"},
+            ],
+        )
 
         # Create a brand new repository instance pointing to the same file
         repo2 = DataRepository(file_path=file_path)
@@ -59,6 +67,10 @@ def test_data_repository_persists_across_instances():
         sessions = repo2.get_sessions("project-100")
         assert len(sessions) == 1
         assert sessions[0]["session_id"] == "chat-1"
+        cards = repo2.get_cards("project-100", "software-arch")
+        assert len(cards) == 2
+        assert cards[0]["title"] == "Modular Monolith"
+        assert cards[0]["id"] is not None
 
 
 def test_api_persistence_endpoints():
@@ -131,3 +143,101 @@ def test_api_persistence_endpoints():
         res = client.delete("/api/projects/project-200")
         assert res.status_code == 200
         assert res.json()["activeProjectId"] == "default"
+
+
+def test_card_repository_methods():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "haiven_data.json")
+        repo = DataRepository(file_path=file_path)
+
+        # 1. Save cards using active project fallback
+        saved = repo.save_cards(
+            project_id=None,
+            prompt_id="prompt-a",
+            cards=[{"title": "Card 1", "summary": "Summary 1"}],
+        )
+        assert len(saved) == 1
+        assert saved[0]["title"] == "Card 1"
+        assert saved[0]["id"] is not None
+
+        # 2. Add single card
+        updated = repo.add_card(
+            project_id=None,
+            prompt_id="prompt-a",
+            card={"id": "custom-card-2", "title": "Card 2", "summary": "Summary 2"},
+        )
+        assert len(updated) == 2
+        assert any(c["id"] == "custom-card-2" for c in updated)
+
+        # 3. Retrieve all cards for active project vs prompt
+        all_cards = repo.get_cards()
+        assert "prompt-a" in all_cards
+        assert len(all_cards["prompt-a"]) == 2
+
+        prompt_cards = repo.get_cards(prompt_id="prompt-a")
+        assert len(prompt_cards) == 2
+
+        # 4. Delete single card
+        assert repo.delete_card(None, "prompt-a", "custom-card-2") is True
+        assert len(repo.get_cards(prompt_id="prompt-a")) == 1
+
+        # 5. Delete cards for prompt
+        assert repo.delete_cards(None, "prompt-a") is True
+        assert repo.get_cards(prompt_id="prompt-a") == []
+
+
+def test_api_cards_endpoints():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "haiven_data.json")
+        repo = DataRepository(file_path=file_path)
+        app = FastAPI()
+        ApiPersistence(app, repo)
+        client = TestClient(app)
+
+        # 1. Save cards via active project endpoint
+        res = client.post(
+            "/api/cards",
+            json={
+                "promptId": "arch-cards",
+                "cards": [
+                    {"title": "Style A", "summary": "Modular"},
+                    {"title": "Style B", "summary": "Serverless"},
+                ],
+            },
+        )
+        assert res.status_code == 200
+        assert len(res.json()) == 2
+
+        # 2. Get cards via active project endpoint
+        res = client.get("/api/cards?promptId=arch-cards")
+        assert res.status_code == 200
+        cards = res.json()
+        assert len(cards) == 2
+        assert cards[0]["title"] == "Style A"
+
+        # 3. Add single card via project-scoped endpoint
+        res = client.post(
+            "/api/projects/default/card",
+            json={
+                "promptId": "arch-cards",
+                "card": {"id": "c-3", "title": "Style C", "summary": "Event-Driven"},
+            },
+        )
+        assert res.status_code == 200
+        assert len(res.json()) == 3
+
+        # 4. Delete single card
+        res = client.delete("/api/projects/default/cards/c-3?promptId=arch-cards")
+        assert res.status_code == 200
+        assert res.json()["deleted"] is True
+
+        # 5. Delete cards for prompt
+        res = client.delete("/api/projects/default/cards?promptId=arch-cards")
+        assert res.status_code == 200
+        assert res.json()["deleted"] is True
+
+        # 6. Verify cards included in state sync
+        res = client.get("/api/persistence/state")
+        assert res.status_code == 200
+        assert "cards" in res.json()
+

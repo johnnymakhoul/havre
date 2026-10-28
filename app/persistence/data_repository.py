@@ -47,6 +47,7 @@ class DataRepository:
             "pinboard": {},
             "contexts": {},
             "sessions": {},
+            "cards": {},
         }
 
     def _ensure_default_project(self, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -76,6 +77,7 @@ class DataRepository:
                             "pinboard": loaded.get("pinboard", {}) or {},
                             "contexts": loaded.get("contexts", {}) or {},
                             "sessions": loaded.get("sessions", {}) or {},
+                            "cards": loaded.get("cards", {}) or {},
                         }
                 else:
                     parent_dir = os.path.dirname(self.file_path)
@@ -120,6 +122,8 @@ class DataRepository:
                 self._data["contexts"] = state["contexts"]
             if "sessions" in state and isinstance(state["sessions"], dict):
                 self._data["sessions"] = state["sessions"]
+            if "cards" in state and isinstance(state["cards"], dict):
+                self._data["cards"] = state["cards"]
 
             self._data["projects"] = projects
             self._data["activeProjectId"] = active_id
@@ -201,6 +205,8 @@ class DataRepository:
                 return False
             self._data["pinboard"].pop(project_id, None)
             self._data["contexts"].pop(project_id, None)
+            if "cards" in self._data:
+                self._data["cards"].pop(project_id, None)
             if self._data["activeProjectId"] == project_id:
                 self._data["activeProjectId"] = DEFAULT_PROJECT["id"]
             self._save()
@@ -307,3 +313,118 @@ class DataRepository:
                 self._save()
                 return True
             return False
+
+    def get_cards(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> Any:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            project_cards = self._data.get("cards", {}).get(target_project, {})
+            if prompt_id is not None:
+                return copy.deepcopy(project_cards.get(prompt_id, []))
+            return copy.deepcopy(project_cards)
+
+    def save_cards(
+        self,
+        project_id: Optional[str],
+        prompt_id: Optional[str],
+        cards: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            target_prompt = prompt_id or "default"
+            if "cards" not in self._data:
+                self._data["cards"] = {}
+            project_cards = self._data["cards"].setdefault(target_project, {})
+
+            processed_cards = []
+            for i, card in enumerate(cards):
+                card_copy = copy.deepcopy(card)
+                if "id" not in card_copy or not card_copy["id"]:
+                    card_copy["id"] = f"card-{int(time.time() * 1000)}-{i}"
+                if "timestamp" not in card_copy:
+                    card_copy["timestamp"] = int(time.time() * 1000)
+                processed_cards.append(card_copy)
+
+            project_cards[target_prompt] = processed_cards
+            self._save()
+            return copy.deepcopy(processed_cards)
+
+    def add_card(
+        self,
+        project_id: Optional[str],
+        prompt_id: Optional[str],
+        card: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            target_prompt = prompt_id or "default"
+            if "cards" not in self._data:
+                self._data["cards"] = {}
+            project_cards = self._data["cards"].setdefault(target_project, {})
+            cards = project_cards.setdefault(target_prompt, [])
+
+            card_copy = copy.deepcopy(card)
+            if "id" not in card_copy or not card_copy["id"]:
+                card_copy["id"] = f"card-{int(time.time() * 1000)}"
+            if "timestamp" not in card_copy:
+                card_copy["timestamp"] = int(time.time() * 1000)
+
+            existing_idx = next(
+                (
+                    i
+                    for i, c in enumerate(cards)
+                    if str(c.get("id")) == str(card_copy["id"])
+                ),
+                None,
+            )
+            if existing_idx is not None:
+                cards[existing_idx] = card_copy
+            else:
+                cards.append(card_copy)
+
+            self._save()
+            return copy.deepcopy(cards)
+
+    def delete_cards(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if "cards" not in self._data or target_project not in self._data["cards"]:
+                return False
+            if prompt_id is not None:
+                if prompt_id in self._data["cards"][target_project]:
+                    del self._data["cards"][target_project][prompt_id]
+                    self._save()
+                    return True
+                return False
+            del self._data["cards"][target_project]
+            self._save()
+            return True
+
+    def delete_card(
+        self,
+        project_id: Optional[str],
+        prompt_id: Optional[str],
+        card_id: str,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            target_prompt = prompt_id or "default"
+            cards = (
+                self._data.get("cards", {})
+                .get(target_project, {})
+                .get(target_prompt, [])
+            )
+            updated = [c for c in cards if str(c.get("id")) != str(card_id)]
+            if len(updated) != len(cards):
+                self._data["cards"][target_project][target_prompt] = updated
+                self._save()
+                return True
+            return False
+
