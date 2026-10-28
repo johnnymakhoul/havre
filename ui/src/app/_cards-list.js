@@ -7,8 +7,9 @@ import {
   RiGridLine,
   RiFileCopyLine,
   RiCloseFill,
+  RiDeleteBinLine,
 } from "react-icons/ri";
-import { Card, Button, Input, Radio, Tooltip, Progress } from "antd";
+import { Card, Button, Input, Radio, Tooltip, Progress, Popconfirm } from "antd";
 import { toast } from "react-toastify";
 import { DynamicDataRenderer, scenarioToText } from "./_dynamic_data_renderer";
 import MarkdownRenderer from "./_markdown_renderer";
@@ -25,6 +26,7 @@ const CardsList = ({
   matrixMode: matrix,
   editable,
   onDelete,
+  onClearAll,
   listIndex,
   featureToggleConfig,
 }) => {
@@ -61,9 +63,25 @@ const CardsList = ({
       <div className="prompt-chat-header">
         {stopLoadComponent && stopLoadComponent}
         {scenarios && scenarios.length > 0 && (
-          <Button type="link" className="copy-all" onClick={onCopyAll}>
-            <RiFileCopyLine fontSize="large" /> COPY ALL
-          </Button>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <Button type="link" className="copy-all" onClick={onCopyAll}>
+              <RiFileCopyLine fontSize="large" /> COPY ALL
+            </Button>
+            {onClearAll && (
+              <Popconfirm
+                title="Clear all cards"
+                description="Are you sure you want to clear all cards for this prompt?"
+                onConfirm={onClearAll}
+                okText="Yes, clear"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+              >
+                <Button type="link" danger className="clear-all">
+                  <RiDeleteBinLine fontSize="large" /> CLEAR ALL
+                </Button>
+              </Popconfirm>
+            )}
+          </div>
         )}
         {scenarios && scenarios.length > 0 && matrix === true && (
           <div className="scenarios-actions">

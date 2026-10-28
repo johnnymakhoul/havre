@@ -24,6 +24,7 @@ import {
   getSummaryForTheUserContext,
   getProjectCards,
   saveProjectCards,
+  deleteProjectCards,
 } from "../app/_local_store";
 import LLMTokenUsage from "../app/_llm_token_usage";
 import PromptPreview from "../app/_prompt_preview";
@@ -223,6 +224,7 @@ const CardsChat = ({
       promptid: usePromptId
         ? selectedPromptConfiguration?.identifier
         : undefined,
+      chatSessionId: chatSessionIdCardBuilding,
     };
     attachContextsToRequestBody(requestBody);
 
@@ -368,7 +370,7 @@ const CardsChat = ({
     );
   };
 
-  const sendFirstStepPrompt = (shouldReset = true) => {
+  const sendFirstStepPrompt = (shouldReset = false) => {
     setIsInputCollapsed(true);
     sendCardBuildingPrompt(buildRequestDataCardBuilding(), shouldReset);
   };
@@ -550,7 +552,7 @@ const CardsChat = ({
           <Form
             onFinish={async () => {
               setIsInputCollapsed(true);
-              sendFirstStepPrompt(true);
+              sendFirstStepPrompt(false);
             }}
             form={form}
             initialValues={{ question: "" }}
@@ -692,6 +694,17 @@ const CardsChat = ({
     updateScenariosAndPersist(updatedScenarios);
   };
 
+  const onClearAllCards = () => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
+    setScenarios([]);
+    resetChatSession();
+    if (currentPromptId) {
+      deleteProjectCards(currentPromptId);
+    }
+    toast.info("Cleared all cards for this prompt.");
+  };
+
   const perplexityModelName = { chat: { name: "Perplexity AI" } };
 
   return (
@@ -735,6 +748,7 @@ const CardsChat = ({
                 onExplore={onExplore}
                 stopLoadComponent={<StopLoad />}
                 onDelete={onDeleteCard}
+                onClearAll={onClearAllCards}
               />
               {inputAreaRender()}
               {scenarios.length > 0 && !isCompanyResearch && (
