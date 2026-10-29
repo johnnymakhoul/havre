@@ -42,6 +42,7 @@ class StateSyncRequest(BaseModel):
     pinboard: Optional[Dict[str, Any]] = None
     contexts: Optional[Dict[str, Any]] = None
     cards: Optional[Dict[str, Any]] = None
+    chats: Optional[Dict[str, Any]] = None
 
 
 class SaveCardsRequest(BaseModel):
@@ -60,6 +61,28 @@ class AddCardRequest(BaseModel):
 
     def get_prompt_id(self) -> str:
         return self.promptId or self.prompt_id or "default"
+
+
+class SaveChatRequest(BaseModel):
+    promptId: Optional[str] = None
+    prompt_id: Optional[str] = None
+    chatSessionId: Optional[str] = None
+    messages: List[Dict[str, Any]] = []
+    tokenUsage: Optional[Dict[str, Any]] = None
+    updatedAt: Optional[int] = None
+
+    def get_prompt_id(self) -> str:
+        return self.promptId or self.prompt_id or "default"
+
+    def to_chat_data(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "chatSessionId": self.chatSessionId,
+            "messages": self.messages,
+            "tokenUsage": self.tokenUsage or {"input_tokens": 0, "output_tokens": 0},
+        }
+        if self.updatedAt is not None:
+            data["updatedAt"] = self.updatedAt
+        return data
 
 
 class ApiPersistence:
@@ -240,6 +263,68 @@ class ApiPersistence:
         ):
             resolved_prompt = prompt_id or promptId
             deleted = self.data_repository.delete_cards(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/projects/{project_id}/chats")
+        def get_project_chats(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_chats(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+
+        @self.app.post("/api/projects/{project_id}/chats")
+        def save_project_chat(project_id: str, request: SaveChatRequest):
+            return self.data_repository.save_chat(
+                project_id=project_id,
+                prompt_id=request.get_prompt_id(),
+                chat_data=request.to_chat_data(),
+            )
+
+        @self.app.delete("/api/projects/{project_id}/chats")
+        def delete_project_chats(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_chats(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/chats")
+        def get_active_project_chats(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_chats(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+
+        @self.app.post("/api/chats")
+        def save_active_project_chat(request: SaveChatRequest):
+            return self.data_repository.save_chat(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=request.get_prompt_id(),
+                chat_data=request.to_chat_data(),
+            )
+
+        @self.app.delete("/api/chats")
+        def delete_active_project_chats(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_chats(
                 project_id=self.data_repository.get_active_project_id(),
                 prompt_id=resolved_prompt,
             )

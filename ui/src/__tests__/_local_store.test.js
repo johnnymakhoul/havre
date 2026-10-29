@@ -19,6 +19,9 @@ import {
   getProjectCards,
   saveProjectCards,
   deleteProjectCards,
+  getProjectChat,
+  saveProjectChat,
+  deleteProjectChat,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -585,6 +588,120 @@ describe("Local Store", () => {
       const cards = getProjectCards("prompt-arch", "default");
       expect(cards).toHaveLength(1);
       expect(cards[0].title).toBe("Hydrated Card");
+
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe("Chats management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return null when no chat exists for prompt", () => {
+      expect(getProjectChat("prompt-1")).toBeNull();
+    });
+
+    it("should save chat and retrieve it by prompt and project", () => {
+      const chatData = {
+        chatSessionId: "boba-chat-101",
+        messages: [
+          { id: "1", role: "user", content: "Hello" },
+          { id: "2", role: "assistant", content: "Hi there!" },
+        ],
+        tokenUsage: { input_tokens: 10, output_tokens: 20 },
+      };
+
+      saveProjectChat("prompt-1", chatData);
+
+      const retrieved = getProjectChat("prompt-1");
+      expect(retrieved.chatSessionId).toBe("boba-chat-101");
+      expect(retrieved.messages).toHaveLength(2);
+      expect(retrieved.messages[1].content).toBe("Hi there!");
+    });
+
+    it("should isolate chats between different projects", () => {
+      saveProjectChat(
+        "prompt-1",
+        {
+          chatSessionId: "session-def",
+          messages: [{ id: "1", role: "assistant", content: "Default reply" }],
+        },
+        "default",
+      );
+      saveProjectChat(
+        "prompt-1",
+        {
+          chatSessionId: "session-p2",
+          messages: [{ id: "1", role: "assistant", content: "Proj 2 reply" }],
+        },
+        "project-2",
+      );
+
+      expect(getProjectChat("prompt-1", "default").messages[0].content).toBe(
+        "Default reply",
+      );
+      expect(getProjectChat("prompt-1", "project-2").messages[0].content).toBe(
+        "Proj 2 reply",
+      );
+    });
+
+    it("should delete chat for a specific prompt", () => {
+      saveProjectChat("prompt-1", {
+        chatSessionId: "s1",
+        messages: [{ id: "1", role: "user", content: "Msg 1" }],
+      });
+      saveProjectChat("prompt-2", {
+        chatSessionId: "s2",
+        messages: [{ id: "2", role: "user", content: "Msg 2" }],
+      });
+
+      deleteProjectChat("prompt-1");
+
+      expect(getProjectChat("prompt-1")).toBeNull();
+      expect(getProjectChat("prompt-2").chatSessionId).toBe("s2");
+    });
+
+    it("should hydrate chats from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {},
+        chats: {
+          default: {
+            "prompt-chat-1": {
+              chatSessionId: "server-session-1",
+              messages: [
+                { id: "m1", role: "user", content: "From server user" },
+                { id: "m2", role: "assistant", content: "From server AI" },
+              ],
+            },
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const chat = getProjectChat("prompt-chat-1", "default");
+      expect(chat.chatSessionId).toBe("server-session-1");
+      expect(chat.messages).toHaveLength(2);
+      expect(chat.messages[1].content).toBe("From server AI");
 
       fetchSpy.mockRestore();
     });

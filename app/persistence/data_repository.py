@@ -48,6 +48,7 @@ class DataRepository:
             "contexts": {},
             "sessions": {},
             "cards": {},
+            "chats": {},
         }
 
     def _ensure_default_project(self, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -78,6 +79,7 @@ class DataRepository:
                             "contexts": loaded.get("contexts", {}) or {},
                             "sessions": loaded.get("sessions", {}) or {},
                             "cards": loaded.get("cards", {}) or {},
+                            "chats": loaded.get("chats", {}) or {},
                         }
                 else:
                     parent_dir = os.path.dirname(self.file_path)
@@ -124,6 +126,8 @@ class DataRepository:
                 self._data["sessions"] = state["sessions"]
             if "cards" in state and isinstance(state["cards"], dict):
                 self._data["cards"] = state["cards"]
+            if "chats" in state and isinstance(state["chats"], dict):
+                self._data["chats"] = state["chats"]
 
             self._data["projects"] = projects
             self._data["activeProjectId"] = active_id
@@ -207,6 +211,8 @@ class DataRepository:
             self._data["contexts"].pop(project_id, None)
             if "cards" in self._data:
                 self._data["cards"].pop(project_id, None)
+            if "chats" in self._data:
+                self._data["chats"].pop(project_id, None)
             if self._data["activeProjectId"] == project_id:
                 self._data["activeProjectId"] = DEFAULT_PROJECT["id"]
             self._save()
@@ -427,4 +433,56 @@ class DataRepository:
                 self._save()
                 return True
             return False
+
+    def get_chats(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> Any:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            project_chats = self._data.get("chats", {}).get(target_project, {})
+            if prompt_id is not None:
+                return copy.deepcopy(project_chats.get(prompt_id, {}))
+            return copy.deepcopy(project_chats)
+
+    def save_chat(
+        self,
+        project_id: Optional[str],
+        prompt_id: Optional[str],
+        chat_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            target_prompt = prompt_id or "default"
+            if "chats" not in self._data:
+                self._data["chats"] = {}
+            project_chats = self._data["chats"].setdefault(target_project, {})
+
+            chat_copy = copy.deepcopy(chat_data) if isinstance(chat_data, dict) else {}
+            if "updatedAt" not in chat_copy:
+                chat_copy["updatedAt"] = int(time.time() * 1000)
+
+            project_chats[target_prompt] = chat_copy
+            self._save()
+            return copy.deepcopy(chat_copy)
+
+    def delete_chats(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if "chats" not in self._data or target_project not in self._data["chats"]:
+                return False
+            if prompt_id is not None:
+                if prompt_id in self._data["chats"][target_project]:
+                    del self._data["chats"][target_project][prompt_id]
+                    self._save()
+                    return True
+                return False
+            del self._data["chats"][target_project]
+            self._save()
+            return True
 

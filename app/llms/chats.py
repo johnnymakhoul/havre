@@ -424,6 +424,54 @@ class ServerChatSessionMemory:
         if self.data_repository:
             self.data_repository.delete_session(session_key)
 
+    def _restore_memory_from_messages(
+        self, chat_session: HaivenBaseChat, saved_messages: list
+    ):
+        if not saved_messages or not hasattr(chat_session, "memory"):
+            return
+        restored = []
+        has_system = False
+        for msg in saved_messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            content = msg.get("content") or msg.get("message") or ""
+            if role == "HaivenSystemMessage" or role == "system":
+                restored.append(HaivenSystemMessage(content=content))
+                has_system = True
+            elif role in ("HaivenHumanMessage", "user"):
+                restored.append(HaivenHumanMessage(content=content))
+            elif role in ("HaivenAIMessage", "assistant"):
+                restored.append(HaivenAIMessage(content=content))
+        if restored:
+            if not has_system and len(chat_session.memory) > 0 and isinstance(
+                chat_session.memory[0], HaivenSystemMessage
+            ):
+                chat_session.memory = [chat_session.memory[0]] + restored
+            else:
+                chat_session.memory = restored
+
+    def _find_persisted_messages(self, session_key: str):
+        if not self.data_repository:
+            return None
+        session_data = self.data_repository.get_session(session_key)
+        if session_data and session_data.get("messages"):
+            return session_data.get("messages")
+        try:
+            state = self.data_repository.get_state()
+            all_chats = state.get("chats", {})
+            for project_chats in all_chats.values():
+                if isinstance(project_chats, dict):
+                    for chat_entry in project_chats.values():
+                        if (
+                            isinstance(chat_entry, dict)
+                            and chat_entry.get("chatSessionId") == session_key
+                        ):
+                            return chat_entry.get("messages", [])
+        except Exception:
+            pass
+        return None
+
     def get_or_create_chat(
         self,
         fn_create_chat,
@@ -436,6 +484,24 @@ class ServerChatSessionMemory:
             chat_session = fn_create_chat()
 
             self.store_chat(chat_session_key_value, chat_session)
+        elif (
+            chat_session_key_value not in self.USER_CHATS
+            and self.data_repository is not None
+        ):
+            persisted_messages = self._find_persisted_messages(chat_session_key_value)
+            if persisted_messages is not None:
+                chat_session = fn_create_chat()
+                self._restore_memory_from_messages(chat_session, persisted_messages)
+                self.USER_CHATS[chat_session_key_value] = {
+                    "created_at": time.time(),
+                    "last_access": time.time(),
+                    "user": user_identifier,
+                    "category": chat_category,
+                    "chat": chat_session,
+                }
+                self._persist_session(chat_session_key_value)
+            else:
+                chat_session = self.get_chat(chat_session_key_value)
         else:
             chat_session = self.get_chat(chat_session_key_value)
 

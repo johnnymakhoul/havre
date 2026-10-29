@@ -241,3 +241,56 @@ def test_api_cards_endpoints():
         assert res.status_code == 200
         assert "cards" in res.json()
 
+
+def test_chat_repository_methods_and_endpoints():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "haiven_data.json")
+        repo = DataRepository(file_path=file_path)
+        app = FastAPI()
+        ApiPersistence(app, repo)
+        client = TestClient(app)
+
+        # 1. Save chat via active project endpoint
+        res = client.post(
+            "/api/chats",
+            json={
+                "promptId": "user-persona",
+                "chatSessionId": "boba-chat-123",
+                "messages": [
+                    {"id": "m1", "role": "user", "content": "Create a persona"},
+                    {"id": "m2", "role": "assistant", "content": "Here is Persona A"},
+                ],
+                "tokenUsage": {"input_tokens": 15, "output_tokens": 30},
+            },
+        )
+        assert res.status_code == 200
+        saved = res.json()
+        assert saved["chatSessionId"] == "boba-chat-123"
+        assert len(saved["messages"]) == 2
+        assert saved["tokenUsage"]["input_tokens"] == 15
+
+        # 2. Retrieve chat by promptId
+        res = client.get("/api/chats?promptId=user-persona")
+        assert res.status_code == 200
+        chat = res.json()
+        assert chat["chatSessionId"] == "boba-chat-123"
+        assert chat["messages"][1]["content"] == "Here is Persona A"
+
+        # 3. Verify isolation across projects
+        repo.add_project({"id": "project-2", "name": "Project 2"})
+        res = client.get("/api/projects/project-2/chats?promptId=user-persona")
+        assert res.status_code == 200
+        assert res.json() == {}
+
+        # 4. Delete chat for prompt
+        res = client.delete("/api/projects/default/chats?promptId=user-persona")
+        assert res.status_code == 200
+        assert res.json()["deleted"] is True
+        assert repo.get_chats("default", "user-persona") == {}
+
+        # 5. Verify chats included in state sync
+        res = client.get("/api/persistence/state")
+        assert res.status_code == 200
+        assert "chats" in res.json()
+
+

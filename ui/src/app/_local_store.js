@@ -156,9 +156,13 @@ export const deleteProject = (projectId) => {
   if (typeof localStorage.removeItem === "function") {
     localStorage.removeItem(`pinboard_${projectId}`);
     localStorage.removeItem(`context_${projectId}`);
+    localStorage.removeItem(`cards_${projectId}`);
+    localStorage.removeItem(`chats_${projectId}`);
   } else {
     localStorage.setItem(`pinboard_${projectId}`, JSON.stringify({}));
     localStorage.setItem(`context_${projectId}`, JSON.stringify([]));
+    localStorage.setItem(`cards_${projectId}`, JSON.stringify({}));
+    localStorage.setItem(`chats_${projectId}`, JSON.stringify({}));
   }
   syncWithBackend(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
@@ -261,6 +265,103 @@ export const deleteProjectCards = (promptId = null, projectId = null) => {
   }
 };
 
+export const getChatsStorageKey = (projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `chats_${activeId}`
+    : "chats";
+};
+
+export const getProjectChat = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getChatsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const chatsMap = raw ? JSON.parse(raw) : {};
+    if (promptId) {
+      return chatsMap[promptId] || null;
+    }
+    return chatsMap || {};
+  } catch (e) {
+    return promptId ? null : {};
+  }
+};
+
+export const saveProjectChat = (promptId, chatData, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const resolvedPrompt = promptId || "default";
+    const storageKey = getChatsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const chatsMap = raw ? JSON.parse(raw) : {};
+    const payload = {
+      chatSessionId: chatData?.chatSessionId,
+      messages: Array.isArray(chatData?.messages) ? chatData.messages : [],
+      tokenUsage: chatData?.tokenUsage || {
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+      updatedAt: chatData?.updatedAt || Date.now(),
+    };
+    chatsMap[resolvedPrompt] = payload;
+    localStorage.setItem(storageKey, JSON.stringify(chatsMap));
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/chats`, {
+      method: "POST",
+      body: JSON.stringify({
+        promptId: resolvedPrompt,
+        ...payload,
+      }),
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-chats", {
+          detail: {
+            promptId: resolvedPrompt,
+            chat: payload,
+            projectId: activeId,
+          },
+        }),
+      );
+    }
+    return payload;
+  } catch (e) {
+    console.error("Failed to save project chat", e);
+    return chatData;
+  }
+};
+
+export const deleteProjectChat = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getChatsStorageKey(activeId);
+    if (promptId) {
+      const raw = localStorage.getItem(storageKey);
+      const chatsMap = raw ? JSON.parse(raw) : {};
+      delete chatsMap[promptId];
+      localStorage.setItem(storageKey, JSON.stringify(chatsMap));
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/chats?promptId=${encodeURIComponent(promptId)}`,
+        { method: "DELETE" },
+      );
+    } else {
+      if (typeof localStorage.removeItem === "function") {
+        localStorage.removeItem(storageKey);
+      } else {
+        localStorage.setItem(storageKey, JSON.stringify({}));
+      }
+      syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/chats`, {
+        method: "DELETE",
+      });
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("update-chats"));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 export const hydrateFromBackend = async () => {
   const serverState = await syncWithBackend("/api/persistence/state", {
     method: "GET",
@@ -273,7 +374,8 @@ export const hydrateFromBackend = async () => {
     serverState.projects.length > 1 ||
     Object.keys(serverState.pinboard || {}).length > 0 ||
     Object.keys(serverState.contexts || {}).length > 0 ||
-    Object.keys(serverState.cards || {}).length > 0;
+    Object.keys(serverState.cards || {}).length > 0 ||
+    Object.keys(serverState.chats || {}).length > 0;
 
   if (serverHasCustomData) {
     localStorage.setItem("projects", JSON.stringify(serverState.projects));
@@ -304,10 +406,19 @@ export const hydrateFromBackend = async () => {
         );
       });
     }
+    if (serverState.chats && typeof serverState.chats === "object") {
+      Object.entries(serverState.chats).forEach(([projId, chats]) => {
+        localStorage.setItem(
+          getChatsStorageKey(projId),
+          JSON.stringify(chats || {}),
+        );
+      });
+    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("update-project"));
       window.dispatchEvent(new Event("update-context"));
       window.dispatchEvent(new Event("update-cards"));
+      window.dispatchEvent(new Event("update-chats"));
     }
   } else {
     // Migrate existing localStorage data to server if present
@@ -315,6 +426,7 @@ export const hydrateFromBackend = async () => {
     const pinboardByProject = {};
     const contextsByProject = {};
     const cardsByProject = {};
+    const chatsByProject = {};
     localProjects.forEach((p) => {
       const pins =
         JSON.parse(localStorage.getItem(getPinboardStorageKey(p.id))) || {};
@@ -331,12 +443,18 @@ export const hydrateFromBackend = async () => {
       if (Object.keys(cards).length > 0) {
         cardsByProject[p.id] = cards;
       }
+      const chats =
+        JSON.parse(localStorage.getItem(getChatsStorageKey(p.id))) || {};
+      if (Object.keys(chats).length > 0) {
+        chatsByProject[p.id] = chats;
+      }
     });
     if (
       localProjects.length > 1 ||
       Object.keys(pinboardByProject).length > 0 ||
       Object.keys(contextsByProject).length > 0 ||
-      Object.keys(cardsByProject).length > 0
+      Object.keys(cardsByProject).length > 0 ||
+      Object.keys(chatsByProject).length > 0
     ) {
       await syncWithBackend("/api/persistence/state", {
         method: "PUT",
@@ -346,6 +464,7 @@ export const hydrateFromBackend = async () => {
           pinboard: pinboardByProject,
           contexts: contextsByProject,
           cards: cardsByProject,
+          chats: chatsByProject,
         }),
       });
     }

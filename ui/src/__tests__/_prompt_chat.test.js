@@ -9,13 +9,22 @@ import {
 import { describe, it, expect, vi } from "vitest";
 import PromptChat from "../app/_prompt_chat";
 import { fetchSSE } from "../app/_fetch_sse";
-import { saveContext } from "../app/_local_store";
+import {
+  saveContext,
+  saveProjectChat,
+  getProjectChat,
+  addProject,
+  setActiveProject,
+} from "../app/_local_store";
 const localStorageMock = (() => {
   let store = {};
   return {
     getItem: (key) => store[key] || null,
     setItem: (key, value) => {
       store[key] = value.toString();
+    },
+    removeItem: (key) => {
+      delete store[key];
     },
     clear: () => {
       store = {};
@@ -31,6 +40,7 @@ vi.mock("../app/_fetch_sse");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -423,6 +433,55 @@ describe("PromptChat Component", () => {
       { timeout: 20000 },
     );
   }, 30000);
+
+  it("should restore persisted conversation for promptId and activeProjectId", async () => {
+    saveProjectChat(
+      mockPrompts[0].identifier,
+      {
+        chatSessionId: "persisted-session-99",
+        messages: [
+          {
+            id: "msg-user-1",
+            role: "user",
+            content: "Persisted user question",
+            createAt: 1700000000000,
+            updateAt: 1700000000000,
+          },
+          {
+            id: "msg-ai-1",
+            role: "assistant",
+            parentId: "msg-user-1",
+            content: "Persisted AI answer for prompt 1",
+            createAt: 1700000001000,
+            updateAt: 1700000001000,
+          },
+        ],
+        tokenUsage: { input_tokens: 42, output_tokens: 84 },
+      },
+      "default",
+    );
+
+    render(
+      <PromptChat
+        promptId={mockPrompts[0].identifier}
+        prompts={mockPrompts}
+        contexts={mockContexts}
+        documents={mockDocuments}
+        models={mockModels}
+        pageTitle="Test Page Title"
+        pageIntro="Test Page Intro"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Persisted AI answer for prompt 1", {
+          exact: false,
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("clear-chat-button")).toBeInTheDocument();
+    });
+  }, 20000);
 
   //TODO:
   //test for checking chat actions are working correctly
