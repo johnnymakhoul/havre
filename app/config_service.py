@@ -277,18 +277,45 @@ class ConfigService:
         """Check if API key authentication is enabled via feature toggle."""
         return os.getenv("API_KEY_AUTH_ENABLED", "false").lower() == "true"
 
+    def load_sandbox_provider(self) -> str:
+        """Load the configured sandbox provider, defaulting to 'e2b'."""
+        env_provider = os.environ.get("SANDBOX_PROVIDER")
+        if env_provider and env_provider.strip():
+            return env_provider.strip().lower()
+        sandbox_cfg = self.data.get("sandbox", {})
+        if isinstance(sandbox_cfg, dict):
+            provider = sandbox_cfg.get("provider")
+            if provider and isinstance(provider, str) and provider.strip():
+                return provider.strip().lower()
+        return "e2b"
+
+    def load_sandbox_provider_config(self, provider: str) -> dict:
+        """Load provider-specific configuration block under 'sandbox.<provider>'."""
+        sandbox_cfg = self.data.get("sandbox", {})
+        if isinstance(sandbox_cfg, dict):
+            provider_cfg = sandbox_cfg.get(provider, {})
+            if isinstance(provider_cfg, dict):
+                return provider_cfg
+        return {}
+
     def get_e2b_api_key(self) -> Optional[str]:
         """Load E2B API key from environment variable or config."""
-        return os.environ.get("E2B_API_KEY") or self.data.get("e2b", {}).get("api_key")
+        key = (
+            os.environ.get("E2B_API_KEY")
+            or self.load_sandbox_provider_config("e2b").get("api_key")
+            or self.data.get("e2b", {}).get("api_key")
+        )
+        return key if key else None
 
     def get_gemini_api_key(self) -> Optional[str]:
         """Load Gemini / Google API key from environment variable or config."""
-        return (
+        key = (
             os.environ.get("GEMINI_API_KEY")
             or os.environ.get("GOOGLE_API_KEY")
             or self.data.get("gemini", {}).get("api_key")
             or self.data.get("google", {}).get("api_key")
         )
+        return key if key else None
 
     def load_data_persistence_path(self) -> str:
         """Load the file path for persistent workspace data."""

@@ -284,3 +284,31 @@ knowledge_pack_path: /non/existent/path
             assert cs.load_api_key_pseudonymization_salt() == "somesalt"
             assert cs.load_api_key_repository_file_path() == "somepath.json"
             os.unlink(tmp_file.name)
+
+
+def test_load_sandbox_provider_and_config(monkeypatch):
+    import tempfile
+    import yaml
+
+    monkeypatch.setattr("config_service.load_dotenv", lambda: None)
+    monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    config_data = {
+        "sandbox": {
+            "provider": "e2b",
+            "e2b": {"api_key": "yaml_e2b_key"},
+        }
+    }
+    with tempfile.NamedTemporaryFile(delete=False, mode="w+") as tmp_file:
+        yaml.dump(config_data, tmp_file)
+        tmp_file.flush()
+        cs = ConfigService(tmp_file.name)
+        assert cs.load_sandbox_provider() == "e2b"
+        assert cs.load_sandbox_provider_config("e2b") == {"api_key": "yaml_e2b_key"}
+        assert cs.get_e2b_api_key() == "yaml_e2b_key"
+
+        monkeypatch.setenv("SANDBOX_PROVIDER", "opensandbox")
+        assert cs.load_sandbox_provider() == "opensandbox"
+        os.unlink(tmp_file.name)
+

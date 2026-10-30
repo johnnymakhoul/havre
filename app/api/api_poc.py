@@ -52,14 +52,16 @@ class ApiPoc:
 
         @app.get("/api/poc/status")
         async def get_poc_status(request: Request):
-            """Check if E2B and Gemini are configured and available for PoC executions."""
+            """Check if the configured sandbox provider and Gemini are configured and available for PoC executions."""
+            sandbox_provider = self.poc_service.get_sandbox_provider()
             return JSONResponse(
                 {
                     "configured": self.poc_service.is_configured(),
-                    "e2b_configured": self.poc_service.is_e2b_configured(),
+                    "sandbox_configured": self.poc_service.is_sandbox_configured(),
                     "gemini_configured": self.poc_service.is_gemini_configured(),
+                    "sandbox_provider": sandbox_provider,
                     "supported_runtimes": ["node", "python", "typescript", "react"],
-                    "engine": "e2b_sandbox_pi",
+                    "engine": f"{sandbox_provider}_sandbox_pi",
                     "provider": "google",
                     "active_previews": len(self.poc_service.list_active_sandboxes()),
                 }

@@ -12,6 +12,85 @@ from fastapi.testclient import TestClient
 from api.api_poc import ApiPoc
 from config_service import ConfigService
 from llms.poc_sandbox_service import PocSandboxService
+from llms.sandbox import (
+    CommandResult,
+    E2BSandboxInstance,
+    E2BSandboxStrategy,
+    SandboxInstance,
+    SandboxStrategy,
+    SandboxStrategyFactory,
+)
+
+
+class TestSandboxStrategyAndFactory(unittest.TestCase):
+    def setUp(self):
+        self.original_e2b = os.environ.get("E2B_API_KEY")
+        self.original_provider = os.environ.get("SANDBOX_PROVIDER")
+        if "E2B_API_KEY" in os.environ:
+            del os.environ["E2B_API_KEY"]
+        if "SANDBOX_PROVIDER" in os.environ:
+            del os.environ["SANDBOX_PROVIDER"]
+
+    def tearDown(self):
+        if self.original_e2b is not None:
+            os.environ["E2B_API_KEY"] = self.original_e2b
+        elif "E2B_API_KEY" in os.environ:
+            del os.environ["E2B_API_KEY"]
+
+        if self.original_provider is not None:
+            os.environ["SANDBOX_PROVIDER"] = self.original_provider
+        elif "SANDBOX_PROVIDER" in os.environ:
+            del os.environ["SANDBOX_PROVIDER"]
+
+    def test_factory_defaults_to_e2b(self):
+        strategy = SandboxStrategyFactory.get_strategy()
+        self.assertIsInstance(strategy, E2BSandboxStrategy)
+        self.assertEqual(strategy.provider_name, "e2b")
+
+    def test_factory_resolves_from_config_service(self):
+        mock_config = MagicMock(spec=ConfigService)
+        mock_config.load_sandbox_provider.return_value = "e2b"
+        mock_config.get_e2b_api_key.return_value = "cfg_e2b_123"
+
+        strategy = SandboxStrategyFactory.get_strategy(config_service=mock_config)
+        self.assertIsInstance(strategy, E2BSandboxStrategy)
+        self.assertTrue(strategy.is_configured())
+        self.assertEqual(strategy.get_api_key(), "cfg_e2b_123")
+
+    def test_factory_raises_for_unknown_provider(self):
+        os.environ["SANDBOX_PROVIDER"] = "unknown_provider"
+        with self.assertRaises(NotImplementedError):
+            SandboxStrategyFactory.get_strategy()
+
+    def test_e2b_instance_delegates_primitives(self):
+        raw_sbx = MagicMock()
+        raw_sbx.sandbox_id = "sbx_raw_1"
+        raw_sbx.get_host.return_value = "sbx_raw_1-3000.e2b.dev"
+        raw_sbx.commands.run.return_value = MagicMock(
+            exit_code=0, stdout="ok", stderr=""
+        )
+
+        instance = E2BSandboxInstance(raw_sbx)
+        self.assertEqual(instance.sandbox_id, "sbx_raw_1")
+
+        instance.write_file("/home/user/app/index.js", "console.log(1);")
+        raw_sbx.files.write.assert_called_once_with(
+            "/home/user/app/index.js", "console.log(1);"
+        )
+
+        cmd_res = instance.run_command("npm test", timeout=30, envs={"FOO": "BAR"})
+        self.assertEqual(cmd_res.exit_code, 0)
+        self.assertEqual(cmd_res.stdout, "ok")
+        raw_sbx.commands.run.assert_called_once_with(
+            "npm test", timeout=30, request_timeout=0, envs={"FOO": "BAR"}
+        )
+
+        host, url = instance.get_preview_url(3000)
+        self.assertEqual(host, "sbx_raw_1-3000.e2b.dev")
+        self.assertEqual(url, "https://sbx_raw_1-3000.e2b.dev")
+
+        instance.kill()
+        raw_sbx.kill.assert_called_once()
 
 
 class TestPocSandboxService(unittest.TestCase):
@@ -19,12 +98,15 @@ class TestPocSandboxService(unittest.TestCase):
         self.original_e2b = os.environ.get("E2B_API_KEY")
         self.original_gemini = os.environ.get("GEMINI_API_KEY")
         self.original_google = os.environ.get("GOOGLE_API_KEY")
+        self.original_provider = os.environ.get("SANDBOX_PROVIDER")
         if "E2B_API_KEY" in os.environ:
             del os.environ["E2B_API_KEY"]
         if "GEMINI_API_KEY" in os.environ:
             del os.environ["GEMINI_API_KEY"]
         if "GOOGLE_API_KEY" in os.environ:
             del os.environ["GOOGLE_API_KEY"]
+        if "SANDBOX_PROVIDER" in os.environ:
+            del os.environ["SANDBOX_PROVIDER"]
 
     def tearDown(self):
         if self.original_e2b is not None:
@@ -42,25 +124,33 @@ class TestPocSandboxService(unittest.TestCase):
         elif "GOOGLE_API_KEY" in os.environ:
             del os.environ["GOOGLE_API_KEY"]
 
-    def test_is_configured_with_explicit_keys(self):
+        if self.original_provider is not None:
+            os.environ["SANDBOX_PROVIDER"] = self.original_provider
+        elif "SANDBOX_PROVIDER" in os.environ:
+            del os.environ["SANDBOX_PROVIDER"]
+
+    def test_is_configured_with_explicit_strategy_and_gemini_key(self):
+        strategy = E2BSandboxStrategy(api_key="e2b_test_123")
         service = PocSandboxService(
-            e2b_api_key="e2b_test_123",
             gemini_api_key="gemini_test_456",
+            sandbox_strategy=strategy,
         )
         self.assertTrue(service.is_configured())
-        self.assertTrue(service.is_e2b_configured())
+        self.assertTrue(service.is_sandbox_configured())
         self.assertTrue(service.is_gemini_configured())
-        self.assertEqual(service.get_e2b_api_key(), "e2b_test_123")
+        self.assertEqual(service.get_sandbox_provider(), "e2b")
         self.assertEqual(service.get_gemini_api_key(), "gemini_test_456")
 
     def test_is_configured_with_config_service(self):
         mock_config = MagicMock(spec=ConfigService)
+        mock_config.load_sandbox_provider.return_value = "e2b"
         mock_config.get_e2b_api_key.return_value = "config_e2b_key"
         mock_config.get_gemini_api_key.return_value = "config_gemini_key"
 
         service = PocSandboxService(config_service=mock_config)
         self.assertTrue(service.is_configured())
-        self.assertEqual(service.get_e2b_api_key(), "config_e2b_key")
+        self.assertTrue(service.is_sandbox_configured())
+        self.assertEqual(service.get_sandbox_provider(), "e2b")
         self.assertEqual(service.get_gemini_api_key(), "config_gemini_key")
 
     def test_is_configured_with_env_vars(self):
@@ -69,15 +159,15 @@ class TestPocSandboxService(unittest.TestCase):
 
         service = PocSandboxService()
         self.assertTrue(service.is_configured())
-        self.assertEqual(service.get_e2b_api_key(), "env_e2b")
+        self.assertTrue(service.is_sandbox_configured())
+        self.assertTrue(service.is_gemini_configured())
         self.assertEqual(service.get_gemini_api_key(), "env_gemini")
 
     def test_is_not_configured_when_empty(self):
         service = PocSandboxService()
         self.assertFalse(service.is_configured())
-        self.assertFalse(service.is_e2b_configured())
+        self.assertFalse(service.is_sandbox_configured())
         self.assertFalse(service.is_gemini_configured())
-        self.assertIsNone(service.get_e2b_api_key())
         self.assertIsNone(service.get_gemini_api_key())
 
     def test_generate_spike_prompt(self):
@@ -136,58 +226,54 @@ class TestPocSandboxService(unittest.TestCase):
             self.assertEqual(zf.read("hello.txt").decode("utf-8"), "Hello, World!")
             self.assertEqual(zf.read("src/app.py").decode("utf-8"), "print('hello')")
 
-    def test_execute_poc_simulation_mode(self):
+    def test_execute_poc_returns_configuration_error_when_unconfigured(self):
         service = PocSandboxService()
+        logged_messages = []
         result = service.execute_poc(
             adr_title="ADR-001 Microservices",
             adr_content="Decision content",
             runtime="node",
+            on_log=lambda msg: logged_messages.append(msg),
         )
-        self.assertTrue(result["success"])
-        self.assertEqual(result["exit_code"], 0)
-        self.assertEqual(result["execution_mode"], "simulated")
-        self.assertIn("preview_url", result)
-        self.assertIn("sim-adr-001-micros", result["sandbox_id"])
-        self.assertIn("https://", result["preview_url"])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["execution_mode"], "e2b_error")
+        self.assertIn("not configured", result["error"])
+        self.assertIn("sandbox provider 'e2b'", result["error"])
+        self.assertIn("GEMINI_API_KEY", result["error"])
         self.assertIsNotNone(result["archive_base64"])
+        self.assertTrue(any("not configured" in m for m in logged_messages))
 
-        # Check preview session is registered
-        session = service.get_preview_session(result["sandbox_id"])
-        self.assertIsNotNone(session)
-        self.assertEqual(session["status"], "running")
+    def test_execute_poc_with_mock_strategy_success(self):
+        mock_instance = MagicMock(spec=SandboxInstance)
+        mock_instance.sandbox_id = "sbx_test_456"
+        mock_instance.get_preview_url.return_value = (
+            "sbx_test_456-3000.e2b.dev",
+            "https://sbx_test_456-3000.e2b.dev",
+        )
 
-        # Stop preview
-        stopped = service.stop_preview(result["sandbox_id"])
-        self.assertTrue(stopped)
-        self.assertIsNone(service.get_preview_session(result["sandbox_id"]))
-
-    def test_execute_poc_with_mock_sandbox_success(self):
-        mock_sandbox = MagicMock()
-        mock_sandbox.sandbox_id = "sbx_test_456"
-        mock_sandbox.get_host.return_value = "sbx_test_456-3000.e2b.dev"
-
-        # Mock commands run results:
+        # Mock run_command results:
         # 1. mkdir
         # 2. npm install -g pi
         # 3. pi run
         # 4. build check
-        # 5. nohup server
-        mock_mkdir = MagicMock(exit_code=0, stdout="", stderr="")
-        mock_setup = MagicMock(exit_code=0, stdout="Pi installed", stderr="")
-        mock_pi = MagicMock(exit_code=0, stdout="App created and built", stderr="")
-        mock_build = MagicMock(exit_code=0, stdout="Build OK", stderr="")
-        mock_server = MagicMock(exit_code=0, stdout="", stderr="")
-
-        mock_sandbox.commands.run.side_effect = [
-            mock_mkdir,
-            mock_setup,
-            mock_pi,
-            mock_build,
-            mock_server,
+        # 5. background server
+        # 6. zip extraction
+        mock_instance.run_command.side_effect = [
+            CommandResult(exit_code=0, stdout="", stderr=""),
+            CommandResult(exit_code=0, stdout="Pi installed", stderr=""),
+            CommandResult(exit_code=0, stdout="App created and built", stderr=""),
+            CommandResult(exit_code=0, stdout="Build OK", stderr=""),
+            CommandResult(exit_code=0, stdout="", stderr=""),
+            CommandResult(exit_code=0, stdout="", stderr=""),
         ]
 
+        mock_strategy = MagicMock(spec=SandboxStrategy)
+        mock_strategy.provider_name = "e2b"
+        mock_strategy.is_configured.return_value = True
+        mock_strategy.create_sandbox.return_value = mock_instance
+
         service = PocSandboxService(
-            sandbox_factory=lambda: mock_sandbox,
+            sandbox_strategy=mock_strategy,
             gemini_api_key="gemini_mock_key",
         )
         result = service.execute_poc(
@@ -203,7 +289,7 @@ class TestPocSandboxService(unittest.TestCase):
         self.assertEqual(result["execution_mode"], "e2b_cloud")
 
         # Verify Pi execution call included Gemini API keys in environment
-        calls = mock_sandbox.commands.run.call_args_list
+        calls = mock_instance.run_command.call_args_list
         pi_call = calls[2]
         self.assertIn("pi --provider google", pi_call[0][0])
         self.assertEqual(pi_call[1]["envs"]["GEMINI_API_KEY"], "gemini_mock_key")
@@ -217,25 +303,27 @@ class TestPocSandboxService(unittest.TestCase):
         # Stop preview
         stopped = service.stop_preview("sbx_test_456")
         self.assertTrue(stopped)
-        mock_sandbox.kill.assert_called_once()
+        mock_instance.kill.assert_called_once()
         self.assertEqual(len(service.list_active_sandboxes()), 0)
 
-    def test_execute_poc_with_mock_sandbox_pi_failure(self):
-        mock_sandbox = MagicMock()
-        mock_sandbox.sandbox_id = "sbx_fail_789"
-
-        mock_mkdir = MagicMock(exit_code=0, stdout="", stderr="")
-        mock_setup = MagicMock(exit_code=0, stdout="", stderr="")
-        mock_pi = MagicMock(exit_code=1, stdout="Syntax error", stderr="Failed to generate code")
-
-        mock_sandbox.commands.run.side_effect = [
-            mock_mkdir,
-            mock_setup,
-            mock_pi,
+    def test_execute_poc_with_mock_strategy_pi_failure(self):
+        mock_instance = MagicMock(spec=SandboxInstance)
+        mock_instance.sandbox_id = "sbx_fail_789"
+        mock_instance.run_command.side_effect = [
+            CommandResult(exit_code=0, stdout="", stderr=""),
+            CommandResult(exit_code=0, stdout="", stderr=""),
+            CommandResult(
+                exit_code=1, stdout="Syntax error", stderr="Failed to generate code"
+            ),
         ]
 
+        mock_strategy = MagicMock(spec=SandboxStrategy)
+        mock_strategy.provider_name = "e2b"
+        mock_strategy.is_configured.return_value = True
+        mock_strategy.create_sandbox.return_value = mock_instance
+
         service = PocSandboxService(
-            sandbox_factory=lambda: mock_sandbox,
+            sandbox_strategy=mock_strategy,
             gemini_api_key="gemini_key",
         )
         result = service.execute_poc(
@@ -244,12 +332,14 @@ class TestPocSandboxService(unittest.TestCase):
         )
 
         self.assertFalse(result["success"])
+        self.assertEqual(result["execution_mode"], "e2b_error")
         self.assertIn("Pi execution failed", result["error"])
-        mock_sandbox.kill.assert_called_once()
+        mock_instance.kill.assert_called_once()
 
-    def test_execute_poc_live_api_keys_handles_network_error(self):
+    def test_execute_poc_live_e2b_strategy_handles_network_error(self):
+        strategy = E2BSandboxStrategy(api_key="offline_e2b_key")
         service = PocSandboxService(
-            e2b_api_key="offline_e2b_key",
+            sandbox_strategy=strategy,
             gemini_api_key="offline_gemini_key",
         )
         with patch("e2b.Sandbox.create", side_effect=Exception("E2B API unreachable")):
@@ -274,16 +364,18 @@ class TestApiPoc(unittest.TestCase):
 
     def test_get_poc_status(self):
         self.mock_poc_service.is_configured.return_value = True
-        self.mock_poc_service.is_e2b_configured.return_value = True
+        self.mock_poc_service.is_sandbox_configured.return_value = True
         self.mock_poc_service.is_gemini_configured.return_value = True
+        self.mock_poc_service.get_sandbox_provider.return_value = "e2b"
         self.mock_poc_service.list_active_sandboxes.return_value = []
 
         response = self.client.get("/api/poc/status")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data["configured"])
-        self.assertTrue(data["e2b_configured"])
+        self.assertTrue(data["sandbox_configured"])
         self.assertTrue(data["gemini_configured"])
+        self.assertEqual(data["sandbox_provider"], "e2b")
         self.assertEqual(data["engine"], "e2b_sandbox_pi")
         self.assertEqual(data["provider"], "google")
 

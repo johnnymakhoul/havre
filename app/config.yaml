@@ -240,3 +240,10 @@ api_key_repository:
   # password: ...
   # database: ...
 
+# --- PoC Sandbox Configuration ---
+sandbox:
+  provider: ${SANDBOX_PROVIDER}  # options: e2b (default), minimal, opensandbox, etc.
+  e2b:
+    api_key: ${E2B_API_KEY}
+
+
