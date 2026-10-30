@@ -49,6 +49,7 @@ class DataRepository:
             "sessions": {},
             "cards": {},
             "chats": {},
+            "followUps": {},
         }
 
     def _ensure_default_project(self, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -80,6 +81,7 @@ class DataRepository:
                             "sessions": loaded.get("sessions", {}) or {},
                             "cards": loaded.get("cards", {}) or {},
                             "chats": loaded.get("chats", {}) or {},
+                            "followUps": loaded.get("followUps", {}) or {},
                         }
                 else:
                     parent_dir = os.path.dirname(self.file_path)
@@ -128,6 +130,8 @@ class DataRepository:
                 self._data["cards"] = state["cards"]
             if "chats" in state and isinstance(state["chats"], dict):
                 self._data["chats"] = state["chats"]
+            if "followUps" in state and isinstance(state["followUps"], dict):
+                self._data["followUps"] = state["followUps"]
 
             self._data["projects"] = projects
             self._data["activeProjectId"] = active_id
@@ -213,6 +217,8 @@ class DataRepository:
                 self._data["cards"].pop(project_id, None)
             if "chats" in self._data:
                 self._data["chats"].pop(project_id, None)
+            if "followUps" in self._data:
+                self._data["followUps"].pop(project_id, None)
             if self._data["activeProjectId"] == project_id:
                 self._data["activeProjectId"] = DEFAULT_PROJECT["id"]
             self._save()
@@ -483,6 +489,64 @@ class DataRepository:
                     return True
                 return False
             del self._data["chats"][target_project]
+            self._save()
+            return True
+
+    def get_follow_ups(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> Any:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            project_follow_ups = self._data.get("followUps", {}).get(
+                target_project, {}
+            )
+            if prompt_id is not None:
+                return copy.deepcopy(project_follow_ups.get(prompt_id, {}))
+            return copy.deepcopy(project_follow_ups)
+
+    def save_follow_ups(
+        self,
+        project_id: Optional[str],
+        prompt_id: Optional[str],
+        follow_ups: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            target_prompt = prompt_id or "default"
+            if "followUps" not in self._data:
+                self._data["followUps"] = {}
+            project_follow_ups = self._data["followUps"].setdefault(
+                target_project, {}
+            )
+
+            follow_ups_copy = (
+                copy.deepcopy(follow_ups) if isinstance(follow_ups, dict) else {}
+            )
+            project_follow_ups[target_prompt] = follow_ups_copy
+            self._save()
+            return copy.deepcopy(follow_ups_copy)
+
+    def delete_follow_ups(
+        self,
+        project_id: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if (
+                "followUps" not in self._data
+                or target_project not in self._data["followUps"]
+            ):
+                return False
+            if prompt_id is not None:
+                if prompt_id in self._data["followUps"][target_project]:
+                    del self._data["followUps"][target_project][prompt_id]
+                    self._save()
+                    return True
+                return False
+            del self._data["followUps"][target_project]
             self._save()
             return True
 

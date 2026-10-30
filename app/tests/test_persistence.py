@@ -294,3 +294,52 @@ def test_chat_repository_methods_and_endpoints():
         assert "chats" in res.json()
 
 
+def test_follow_ups_repository_methods_and_endpoints():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "haiven_data.json")
+        repo = DataRepository(file_path=file_path)
+        app = FastAPI()
+        ApiPersistence(app, repo)
+        client = TestClient(app)
+
+        # 1. Save follow-ups via active project endpoint
+        res = client.post(
+            "/api/follow-ups",
+            json={
+                "promptId": "arch-prompt",
+                "followUps": {
+                    "follow-up-1": "Detailed follow-up output 1",
+                    "follow-up-2": "Detailed follow-up output 2",
+                },
+            },
+        )
+        assert res.status_code == 200
+        saved = res.json()
+        assert saved["follow-up-1"] == "Detailed follow-up output 1"
+        assert saved["follow-up-2"] == "Detailed follow-up output 2"
+
+        # 2. Retrieve follow-ups by promptId
+        res = client.get("/api/follow-ups?promptId=arch-prompt")
+        assert res.status_code == 200
+        follow_ups = res.json()
+        assert follow_ups["follow-up-1"] == "Detailed follow-up output 1"
+
+        # 3. Verify isolation across projects
+        repo.add_project({"id": "project-2", "name": "Project 2"})
+        res = client.get("/api/projects/project-2/follow-ups?promptId=arch-prompt")
+        assert res.status_code == 200
+        assert res.json() == {}
+
+        # 4. Delete follow-ups for prompt
+        res = client.delete("/api/projects/default/follow-ups?promptId=arch-prompt")
+        assert res.status_code == 200
+        assert res.json()["deleted"] is True
+        assert repo.get_follow_ups("default", "arch-prompt") == {}
+
+        # 5. Verify followUps included in state sync
+        res = client.get("/api/persistence/state")
+        assert res.status_code == 200
+        assert "followUps" in res.json()
+
+
+

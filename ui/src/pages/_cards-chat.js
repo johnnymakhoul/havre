@@ -25,6 +25,12 @@ import {
   getProjectCards,
   saveProjectCards,
   deleteProjectCards,
+  getProjectFollowUps,
+  saveProjectFollowUps,
+  deleteProjectFollowUps,
+  deleteProjectChat,
+  getExplorationChatKey,
+  deleteProjectExplorationsForPrompt,
 } from "../app/_local_store";
 import LLMTokenUsage from "../app/_llm_token_usage";
 import PromptPreview from "../app/_prompt_preview";
@@ -113,12 +119,17 @@ const CardsChat = ({
         selectedPromptId.includes("company-research-product-evolution"),
       );
 
+      const savedFollowUps = getProjectFollowUps(selectedPromptId);
       if (firstStepEntry) {
+        const mergedFollowUps = {};
         firstStepEntry.followUps.forEach((followUp) => {
-          followUpResults[followUp.identifier] = "";
+          mergedFollowUps[followUp.identifier] =
+            savedFollowUps?.[followUp.identifier] || "";
         });
-        setFollowUpResults(followUpResults);
+        setFollowUpResults({ ...savedFollowUps, ...mergedFollowUps });
         setSelectedPromptConfiguration(firstStepEntry);
+      } else if (savedFollowUps && typeof savedFollowUps === "object") {
+        setFollowUpResults(savedFollowUps);
       }
       combineAllContexts(contexts);
       const existingCards = getProjectCards(selectedPromptId);
@@ -146,6 +157,19 @@ const CardsChat = ({
         if (Array.isArray(projectCards) && projectCards.length > 0) {
           setIsInputCollapsed(true);
         }
+        const projectFollowUps = getProjectFollowUps(selectedPromptId);
+        const firstStepEntry = prompts.find(
+          (entry) => entry.value === selectedPromptId,
+        );
+        const restoredFollowUps = {};
+        firstStepEntry?.followUps?.forEach((followUp) => {
+          restoredFollowUps[followUp.identifier] =
+            projectFollowUps?.[followUp.identifier] || "";
+        });
+        setFollowUpResults({
+          ...(projectFollowUps || {}),
+          ...restoredFollowUps,
+        });
       }
     };
 
@@ -311,7 +335,8 @@ const CardsChat = ({
             );
           } else if (Array.isArray(output) && currentPromptId) {
             const finalCards = [...baseScenarios, ...output];
-            saveProjectCards(currentPromptId, finalCards);
+            const savedCards = saveProjectCards(currentPromptId, finalCards);
+            setScenarios(savedCards);
           }
           abortLoad();
         },
@@ -435,14 +460,22 @@ const CardsChat = ({
   };
 
   const onFollowUp = (followUpId) => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
     sendFollowUpPrompt(
       "/api/prompt/follow-up",
       (result) => {
         console.log("Ji", result);
-        setFollowUpResults((prevResults) => ({
-          ...prevResults,
-          [followUpId]: result,
-        }));
+        setFollowUpResults((prevResults) => {
+          const updatedResults = {
+            ...prevResults,
+            [followUpId]: result,
+          };
+          if (currentPromptId) {
+            saveProjectFollowUps(currentPromptId, updatedResults);
+          }
+          return updatedResults;
+        });
       },
       followUpId,
       followUpText,
@@ -676,9 +709,13 @@ const CardsChat = ({
   };
 
   const onDeleteCard = (index) => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
     let updatedScenarios;
+    let deletedCard = null;
     if (index.section !== undefined) {
       if (index.card !== undefined) {
+        deletedCard = scenarios[index.section]?.scenarios?.[index.card];
         scenarios[index.section].scenarios = scenarios[
           index.section
         ].scenarios.filter((_, i) => i !== index.card);
@@ -689,7 +726,14 @@ const CardsChat = ({
         );
       }
     } else {
+      deletedCard = scenarios[index.card];
       updatedScenarios = scenarios.filter((_, i) => i !== index.card);
+    }
+    if (currentPromptId && deletedCard) {
+      const cardKey = deletedCard.id || deletedCard.title;
+      if (cardKey) {
+        deleteProjectChat(getExplorationChatKey(currentPromptId, cardKey));
+      }
     }
     updateScenariosAndPersist(updatedScenarios);
   };
@@ -698,9 +742,12 @@ const CardsChat = ({
     const currentPromptId =
       selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
     setScenarios([]);
+    setCardExplorationDrawerOpen(false);
     resetChatSession();
     if (currentPromptId) {
       deleteProjectCards(currentPromptId);
+      deleteProjectFollowUps(currentPromptId);
+      deleteProjectExplorationsForPrompt(currentPromptId);
     }
     toast.info("Cleared all cards for this prompt.");
   };

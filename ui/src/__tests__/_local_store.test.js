@@ -22,6 +22,11 @@ import {
   getProjectChat,
   saveProjectChat,
   deleteProjectChat,
+  getExplorationChatKey,
+  deleteProjectExplorationsForPrompt,
+  getProjectFollowUps,
+  saveProjectFollowUps,
+  deleteProjectFollowUps,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -702,6 +707,121 @@ describe("Local Store", () => {
       expect(chat.chatSessionId).toBe("server-session-1");
       expect(chat.messages).toHaveLength(2);
       expect(chat.messages[1].content).toBe("From server AI");
+
+      fetchSpy.mockRestore();
+    });
+
+    it("should build exploration chat keys and delete all explorations for a prompt", () => {
+      const key1 = getExplorationChatKey("prompt-a", "card-1");
+      const key2 = getExplorationChatKey("prompt-a", "card-2");
+      const keyOther = getExplorationChatKey("prompt-b", "card-1");
+
+      expect(key1).toBe("explore:prompt-a:card-1");
+
+      saveProjectChat(key1, {
+        chatSessionId: "exp-1",
+        messages: [{ id: "1", role: "assistant", content: "Explore 1" }],
+      });
+      saveProjectChat(key2, {
+        chatSessionId: "exp-2",
+        messages: [{ id: "2", role: "assistant", content: "Explore 2" }],
+      });
+      saveProjectChat(keyOther, {
+        chatSessionId: "exp-other",
+        messages: [{ id: "3", role: "assistant", content: "Explore Other" }],
+      });
+
+      deleteProjectExplorationsForPrompt("prompt-a");
+
+      expect(getProjectChat(key1)).toBeNull();
+      expect(getProjectChat(key2)).toBeNull();
+      expect(getProjectChat(keyOther)?.chatSessionId).toBe("exp-other");
+    });
+  });
+
+  describe("Follow-ups management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return empty object when no follow-ups exist for prompt", () => {
+      expect(getProjectFollowUps("prompt-1")).toEqual({});
+    });
+
+    it("should save follow-ups and retrieve them by prompt and project", () => {
+      const followUps = {
+        "follow-1": "Follow-up 1 markdown output",
+        "follow-2": "Follow-up 2 markdown output",
+      };
+
+      saveProjectFollowUps("prompt-1", followUps);
+
+      const retrieved = getProjectFollowUps("prompt-1");
+      expect(retrieved["follow-1"]).toBe("Follow-up 1 markdown output");
+      expect(retrieved["follow-2"]).toBe("Follow-up 2 markdown output");
+    });
+
+    it("should isolate follow-ups between different projects", () => {
+      saveProjectFollowUps("prompt-1", { f1: "Default follow-up" }, "default");
+      saveProjectFollowUps(
+        "prompt-1",
+        { f1: "Project 2 follow-up" },
+        "project-2",
+      );
+
+      expect(getProjectFollowUps("prompt-1", "default").f1).toBe(
+        "Default follow-up",
+      );
+      expect(getProjectFollowUps("prompt-1", "project-2").f1).toBe(
+        "Project 2 follow-up",
+      );
+    });
+
+    it("should delete follow-ups for a specific prompt", () => {
+      saveProjectFollowUps("prompt-1", { f1: "Output 1" });
+      saveProjectFollowUps("prompt-2", { f2: "Output 2" });
+
+      deleteProjectFollowUps("prompt-1");
+
+      expect(getProjectFollowUps("prompt-1")).toEqual({});
+      expect(getProjectFollowUps("prompt-2").f2).toBe("Output 2");
+    });
+
+    it("should hydrate follow-ups from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {},
+        chats: {},
+        followUps: {
+          default: {
+            "prompt-arch": {
+              "follow-up-a": "Hydrated follow-up response",
+            },
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const followUps = getProjectFollowUps("prompt-arch", "default");
+      expect(followUps["follow-up-a"]).toBe("Hydrated follow-up response");
 
       fetchSpy.mockRestore();
     });

@@ -43,6 +43,7 @@ class StateSyncRequest(BaseModel):
     contexts: Optional[Dict[str, Any]] = None
     cards: Optional[Dict[str, Any]] = None
     chats: Optional[Dict[str, Any]] = None
+    followUps: Optional[Dict[str, Any]] = None
 
 
 class SaveCardsRequest(BaseModel):
@@ -83,6 +84,15 @@ class SaveChatRequest(BaseModel):
         if self.updatedAt is not None:
             data["updatedAt"] = self.updatedAt
         return data
+
+
+class SaveFollowUpsRequest(BaseModel):
+    promptId: Optional[str] = None
+    prompt_id: Optional[str] = None
+    followUps: Dict[str, Any] = {}
+
+    def get_prompt_id(self) -> str:
+        return self.promptId or self.prompt_id or "default"
 
 
 class ApiPersistence:
@@ -325,6 +335,70 @@ class ApiPersistence:
         ):
             resolved_prompt = prompt_id or promptId
             deleted = self.data_repository.delete_chats(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/projects/{project_id}/follow-ups")
+        def get_project_follow_ups(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_follow_ups(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+
+        @self.app.post("/api/projects/{project_id}/follow-ups")
+        def save_project_follow_ups(
+            project_id: str, request: SaveFollowUpsRequest
+        ):
+            return self.data_repository.save_follow_ups(
+                project_id=project_id,
+                prompt_id=request.get_prompt_id(),
+                follow_ups=request.followUps,
+            )
+
+        @self.app.delete("/api/projects/{project_id}/follow-ups")
+        def delete_project_follow_ups(
+            project_id: str,
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_follow_ups(
+                project_id=project_id, prompt_id=resolved_prompt
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/follow-ups")
+        def get_active_project_follow_ups(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            return self.data_repository.get_follow_ups(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=resolved_prompt,
+            )
+
+        @self.app.post("/api/follow-ups")
+        def save_active_project_follow_ups(request: SaveFollowUpsRequest):
+            return self.data_repository.save_follow_ups(
+                project_id=self.data_repository.get_active_project_id(),
+                prompt_id=request.get_prompt_id(),
+                follow_ups=request.followUps,
+            )
+
+        @self.app.delete("/api/follow-ups")
+        def delete_active_project_follow_ups(
+            prompt_id: Optional[str] = None,
+            promptId: Optional[str] = None,
+        ):
+            resolved_prompt = prompt_id or promptId
+            deleted = self.data_repository.delete_follow_ups(
                 project_id=self.data_repository.get_active_project_id(),
                 prompt_id=resolved_prompt,
             )
