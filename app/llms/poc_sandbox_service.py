@@ -8,35 +8,29 @@ import zipfile
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
+from llms.sandbox.base import SandboxStrategy
+from llms.sandbox.factory import SandboxStrategyFactory
+
 
 class PocSandboxService:
-    """Service to generate, execute, and deploy architectural spikes and PoCs in an E2B Sandbox using Pi Coding Agent and Google Gemini."""
+    """Service to generate, execute, and deploy architectural spikes and PoCs in a configured Sandbox using Pi Coding Agent and Google Gemini."""
 
     def __init__(
         self,
         config_service=None,
-        e2b_api_key: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
-        sandbox_factory=None,
+        sandbox_strategy: Optional[SandboxStrategy] = None,
     ):
         self.config_service = config_service
-        self._explicit_e2b_key = e2b_api_key
         self._explicit_gemini_key = gemini_api_key
-        self.sandbox_factory = sandbox_factory
+        self.sandbox_strategy: SandboxStrategy = (
+            sandbox_strategy
+            or SandboxStrategyFactory.get_strategy(config_service=config_service)
+        )
         self.active_sandboxes: Dict[str, Dict[str, Any]] = {}
 
-    def get_e2b_api_key(self) -> Optional[str]:
-        if self._explicit_e2b_key:
-            return self._explicit_e2b_key
-        if self.config_service and hasattr(self.config_service, "get_e2b_api_key"):
-            key = self.config_service.get_e2b_api_key()
-            if key:
-                return key
-        return os.environ.get("E2B_API_KEY")
-
-    def get_api_key(self) -> Optional[str]:
-        """Backward compatibility alias for get_e2b_api_key."""
-        return self.get_e2b_api_key()
+    def get_sandbox_provider(self) -> str:
+        return self.sandbox_strategy.provider_name
 
     def get_gemini_api_key(self) -> Optional[str]:
         if self._explicit_gemini_key:
@@ -47,15 +41,15 @@ class PocSandboxService:
                 return key
         return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-    def is_configured(self) -> bool:
-        """Check if both E2B and Gemini are configured."""
-        return bool(self.get_e2b_api_key() and self.get_gemini_api_key())
-
-    def is_e2b_configured(self) -> bool:
-        return bool(self.get_e2b_api_key())
+    def is_sandbox_configured(self) -> bool:
+        return bool(self.sandbox_strategy.is_configured())
 
     def is_gemini_configured(self) -> bool:
         return bool(self.get_gemini_api_key())
+
+    def is_configured(self) -> bool:
+        """Check if both the configured sandbox strategy and Gemini are configured."""
+        return bool(self.is_sandbox_configured() and self.is_gemini_configured())
 
     def generate_spike_prompt(
         self,
@@ -83,6 +77,7 @@ class PocSandboxService:
     ) -> Dict[str, str]:
         """Generate a baseline functional spike project structure for the ADR."""
         clean_title = adr_title.replace(" ", "_").lower()
+        provider = self.get_sandbox_provider()
         if runtime.lower() in ["node", "javascript", "typescript", "react"]:
             return {
                 "package.json": (
@@ -114,7 +109,7 @@ class PocSandboxService:
                 ),
                 "index.html": (
                     f"<!DOCTYPE html><html><head><title>{adr_title}</title></head>"
-                    f"<body><h1>PoC Spike: {adr_title}</h1><p>Running on E2B</p></body></html>"
+                    f"<body><h1>PoC Spike: {adr_title}</h1><p>Running on {provider}</p></body></html>"
                 ),
                 "README.md": f"# Architectural PoC Spike: {adr_title}\n\n{adr_content}",
             }
@@ -144,7 +139,7 @@ class PocSandboxService:
                 ),
                 "index.html": (
                     f"<!DOCTYPE html><html><head><title>{adr_title}</title></head>"
-                    f"<body><h1>PoC Spike: {adr_title}</h1><p>Running on E2B</p></body></html>"
+                    f"<body><h1>PoC Spike: {adr_title}</h1><p>Running on {provider}</p></body></html>"
                 ),
                 "README.md": f"# Architectural PoC Spike: {adr_title}\n\n{adr_content}",
             }
@@ -174,23 +169,49 @@ class PocSandboxService:
         keep_alive_for_preview: bool = True,
         on_log: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Execute the PoC using Pi in an E2B Sandbox, deploy background server, and expose preview URL."""
+        """Execute the PoC using Pi in the configured Sandbox strategy, deploy background server, and expose preview URL."""
         if not files:
             files = self.generate_default_files_for_adr(adr_title, adr_content, runtime)
 
         if not prompt:
-            prompt = self.generate_spike_prompt(adr_title, adr_content, runtime, preview_port)
+            prompt = self.generate_spike_prompt(
+                adr_title, adr_content, runtime, preview_port
+            )
 
-        e2b_key = self.get_e2b_api_key()
+        provider = self.get_sandbox_provider()
         gemini_key = self.get_gemini_api_key()
 
-        # If custom sandbox factory is injected (e.g. for unit tests)
-        if self.sandbox_factory:
+        if not self.is_configured():
+            missing = []
+            if not self.is_sandbox_configured():
+                missing.append(f"sandbox provider '{provider}'")
+            if not gemini_key:
+                missing.append("GEMINI_API_KEY")
+            err_msg = (
+                f"PoC sandbox is not configured: missing {', '.join(missing)}."
+            )
+            logger.error(err_msg)
+            if on_log:
+                try:
+                    on_log(f"Error: {err_msg}\n")
+                except Exception:
+                    pass
+            return {
+                "success": False,
+                "error": err_msg,
+                "logs": err_msg,
+                "files": list(files.keys()),
+                "archive_base64": self.create_zip_archive(files),
+                "runtime": runtime,
+                "execution_mode": f"{provider}_error",
+                "summary": err_msg,
+            }
+
+        try:
             return self._execute_with_sandbox(
-                self.sandbox_factory,
                 adr_title=adr_title,
                 prompt=prompt,
-                gemini_key=gemini_key or "mock_gemini_key",
+                gemini_key=gemini_key or "",
                 files=files,
                 runtime=runtime,
                 test_command=test_command,
@@ -202,56 +223,27 @@ class PocSandboxService:
                 keep_alive_for_preview=keep_alive_for_preview,
                 on_log=on_log,
             )
-
-        # Real E2B execution when API keys are present
-        if e2b_key and gemini_key:
-            try:
-                from e2b import Sandbox
-
-                return self._execute_with_sandbox(
-                    lambda: Sandbox.create(api_key=e2b_key, timeout=timeout_seconds, request_timeout=0),
-                    adr_title=adr_title,
-                    prompt=prompt,
-                    gemini_key=gemini_key,
-                    files=files,
-                    runtime=runtime,
-                    test_command=test_command,
-                    build_command=build_command,
-                    deploy_command=deploy_command,
-                    preview_port=preview_port,
-                    timeout_seconds=timeout_seconds,
-                    agent_timeout_seconds=agent_timeout_seconds,
-                    keep_alive_for_preview=keep_alive_for_preview,
-                    on_log=on_log,
-                )
-            except Exception as e:
-                err_msg = f"Failed to execute PoC in E2B cloud: {e}"
-                logger.error(err_msg)
-                if on_log:
+        except Exception as e:
+            err_msg = f"Failed to execute PoC in {provider} sandbox: {e}"
+            logger.error(err_msg)
+            if on_log:
+                try:
                     on_log(f"Error: {err_msg}\n")
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "logs": f"E2B execution error: {e}",
-                    "files": list(files.keys()),
-                    "archive_base64": self.create_zip_archive(files),
-                    "execution_mode": "e2b_error",
-                    "summary": err_msg,
-                }
-
-        # Fallback simulation mode when no E2B or Gemini key is configured
-        return self._simulate_execution(
-            adr_title=adr_title,
-            runtime=runtime,
-            files=files,
-            prompt=prompt,
-            preview_port=preview_port,
-            on_log=on_log,
-        )
+                except Exception:
+                    pass
+            return {
+                "success": False,
+                "error": str(e),
+                "logs": f"{provider} execution error: {e}",
+                "files": list(files.keys()),
+                "archive_base64": self.create_zip_archive(files),
+                "runtime": runtime,
+                "execution_mode": f"{provider}_error",
+                "summary": err_msg,
+            }
 
     def _execute_with_sandbox(
         self,
-        sandbox_creator,
         adr_title: str,
         prompt: str,
         gemini_key: str,
@@ -266,8 +258,9 @@ class PocSandboxService:
         keep_alive_for_preview: bool,
         on_log: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        sandbox = sandbox_creator()
-        sandbox_id = getattr(sandbox, "sandbox_id", "sandbox_active")
+        provider = self.get_sandbox_provider()
+        sandbox = self.sandbox_strategy.create_sandbox(timeout_seconds=timeout_seconds)
+        sandbox_id = sandbox.sandbox_id
         all_logs = []
         is_successful = False
 
@@ -281,23 +274,26 @@ class PocSandboxService:
 
         try:
             # 1. Prepare workspace and install Pi if needed
-            log(f"Provisioned E2B microVM: {sandbox_id}")
-            sandbox.commands.run("mkdir -p /home/user/app", timeout=60, request_timeout=0)
+            log(f"Provisioned {provider} sandbox: {sandbox_id}")
+            sandbox.run_command("mkdir -p /home/user/app", timeout=60)
 
             # Write input/seed files if any
             for path, content in files.items():
-                target_path = path if path.startswith("/") else f"/home/user/app/{path}"
+                target_path = (
+                    path if path.startswith("/") else f"/home/user/app/{path}"
+                )
                 try:
-                    sandbox.files.write(target_path, content)
+                    sandbox.write_file(target_path, content)
                 except Exception as ex:
                     logger.debug(f"Could not write file {target_path}: {ex}")
 
             # Ensure Node.js 22+ and Pi coding agent are installed
-            log("Configuring Node.js 22+ & Pi coding agent (@earendil-works/pi-coding-agent)...")
-            setup_cmd = sandbox.commands.run(
+            log(
+                "Configuring Node.js 22+ & Pi coding agent (@earendil-works/pi-coding-agent)..."
+            )
+            setup_cmd = sandbox.run_command(
                 "node -v | grep -q 'v22' || (npm install -g n && n 22) && (which pi || npm install -g @earendil-works/pi-coding-agent)",
                 timeout=300,
-                request_timeout=0,
                 on_stdout=lambda text: log(text),
                 on_stderr=lambda text: log(text),
             )
@@ -316,13 +312,12 @@ class PocSandboxService:
             log("\n--- Prompt Sent to Pi Agent ---")
             log(prompt.strip())
             log("--------------------------------\n")
-            pi_result = sandbox.commands.run(
+            pi_result = sandbox.run_command(
                 pi_command,
                 envs={
                     "GEMINI_API_KEY": gemini_key,
                 },
                 timeout=agent_timeout_seconds,
-                request_timeout=0,
                 on_stdout=lambda text: log(text),
                 on_stderr=lambda text: log(text),
             )
@@ -342,10 +337,9 @@ class PocSandboxService:
                 else:
                     build_command = "cd /home/user/app && python3 -m unittest discover . 2>/dev/null || true"
 
-            build_res = sandbox.commands.run(
+            build_res = sandbox.run_command(
                 build_command,
                 timeout=300,
-                request_timeout=0,
                 on_stdout=lambda text: log(text),
                 on_stderr=lambda text: log(text),
             )
@@ -365,41 +359,44 @@ class PocSandboxService:
                     f"else python3 -m http.server {preview_port}; fi"
                 )
             log(f"Starting server for live preview on port {preview_port}...")
-            sandbox.commands.run(
+            sandbox.run_command(
                 deploy_command,
                 background=True,
                 timeout=0,
-                request_timeout=0,
             )
             log(f"Deployed background server on port {preview_port}")
 
             # 5. Obtain public preview URL
-            host = None
-            if hasattr(sandbox, "get_host"):
-                host = sandbox.get_host(preview_port)
-            public_url = f"https://{host}" if host else f"https://sandbox-{sandbox_id}.e2b.dev"
+            host, public_url = sandbox.get_preview_url(preview_port)
             log(f"Live preview accessible at: {public_url}")
 
             archive_base64 = self.create_zip_archive(files)
-            if not self.sandbox_factory:
-                try:
-                    zip_res = sandbox.commands.run(
-                        "cd /home/user/app && python3 -c \""
-                        "import base64, io, os, zipfile; "
-                        "buf = io.BytesIO(); "
-                        "zf = zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED); "
-                        "[zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), '.')) "
-                        " for r, d, fs in os.walk('.') if 'node_modules' not in r and '.git' not in r for f in fs]; "
-                        "zf.close(); "
-                        "print(base64.b64encode(buf.getvalue()).decode('utf-8'))"
-                        "\"",
-                        timeout=30,
-                        request_timeout=0,
-                    )
-                    if zip_res.exit_code == 0 and zip_res.stdout.strip():
-                        archive_base64 = zip_res.stdout.strip()
-                except Exception as e:
-                    logger.warning(f"Could not extract generated codebase from sandbox: {e}")
+            try:
+                zip_res = sandbox.run_command(
+                    'cd /home/user/app && python3 -c "'
+                    "import base64, io, os, zipfile; "
+                    "buf = io.BytesIO(); "
+                    "zf = zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED); "
+                    "[zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), '.')) "
+                    " for r, d, fs in os.walk('.') if 'node_modules' not in r and '.git' not in r for f in fs]; "
+                    "zf.close(); "
+                    "print(base64.b64encode(buf.getvalue()).decode('utf-8'))"
+                    '"',
+                    timeout=30,
+                )
+                if (
+                    zip_res
+                    and getattr(zip_res, "exit_code", 1) == 0
+                    and isinstance(getattr(zip_res, "stdout", None), str)
+                    and zip_res.stdout.strip()
+                ):
+                    archive_base64 = zip_res.stdout.strip()
+            except StopIteration:
+                pass
+            except Exception as e:
+                logger.warning(
+                    f"Could not extract generated codebase from sandbox: {e}"
+                )
 
             is_successful = True
 
@@ -416,7 +413,7 @@ class PocSandboxService:
                 "files": list(files.keys()),
                 "archive_base64": archive_base64,
                 "runtime": runtime,
-                "execution_mode": "e2b_cloud",
+                "execution_mode": f"{provider}_cloud",
                 "summary": f"PoC built and deployed successfully with Pi! Live preview available at {public_url}",
             }
 
@@ -428,7 +425,9 @@ class PocSandboxService:
                     "host": host,
                     "port": preview_port,
                     "adr_title": adr_title,
-                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "created_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
                     "status": "running",
                     "archive_base64": archive_base64,
                 }
@@ -443,7 +442,7 @@ class PocSandboxService:
         except Exception as exc:
             all_logs.append(f"Error during sandbox execution: {str(exc)}")
             logger.error(f"Error during sandbox execution: {exc}")
-            if not is_successful and hasattr(sandbox, "kill"):
+            if not is_successful:
                 try:
                     sandbox.kill()
                 except Exception:
@@ -456,80 +455,9 @@ class PocSandboxService:
                 "files": list(files.keys()),
                 "archive_base64": self.create_zip_archive(files),
                 "runtime": runtime,
-                "execution_mode": "e2b_cloud",
+                "execution_mode": f"{provider}_error",
                 "summary": f"PoC execution failed: {str(exc)}",
             }
-
-    def _simulate_execution(
-        self,
-        adr_title: str,
-        runtime: str,
-        files: Dict[str, str],
-        prompt: str,
-        preview_port: int,
-        on_log: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        """Dry-run verification simulating Pi agent and deployment when credentials are not supplied."""
-        clean_name = adr_title.replace(" ", "-").lower()
-        simulated_sandbox_id = f"sim-{clean_name[:16]}"
-        simulated_preview_url = f"https://{simulated_sandbox_id}.preview.e2b.dev"
-        archive_base64 = self.create_zip_archive(files)
-
-        if on_log:
-            on_log(f"Provisioned simulated sandbox: {simulated_sandbox_id}\n")
-            on_log("\n--- Prompt Sent to Pi Agent ---\n")
-            on_log(f"{prompt.strip()}\n")
-            on_log("--------------------------------\n")
-            on_log("Simulated Pi coding agent executed in sandbox.\n")
-            on_log("All simulated unit tests passed.\n")
-            on_log(f"Live background service deployed on port {preview_port}\n")
-            on_log(f"Live preview accessible at: {simulated_preview_url}\n")
-
-        simulated_stdout = (
-            f"Simulated Pi coding agent executed in sandbox '{simulated_sandbox_id}'.\n"
-            f"Model provider: Google Gemini (simulated).\n"
-            f"Generated vertical slice in /home/user/app.\n"
-            f"All unit tests passed (exit code 0).\n"
-            f"Live background service deployed on port {preview_port}."
-        )
-
-        simulated_logs = (
-            f"Provisioned simulated sandbox: {simulated_sandbox_id}\n"
-            f"Pi synthesis completed successfully.\n"
-            f"Preview URL: {simulated_preview_url}\n"
-        )
-
-        session_info = {
-            "sandbox_id": simulated_sandbox_id,
-            "preview_url": simulated_preview_url,
-            "host": f"{simulated_sandbox_id}.preview.e2b.dev",
-            "port": preview_port,
-            "adr_title": adr_title,
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "status": "running",
-            "archive_base64": archive_base64,
-        }
-        self.active_sandboxes[simulated_sandbox_id] = session_info
-
-        return {
-            "success": True,
-            "sandbox_id": simulated_sandbox_id,
-            "preview_url": simulated_preview_url,
-            "host": f"{simulated_sandbox_id}.preview.e2b.dev",
-            "preview_port": preview_port,
-            "exit_code": 0,
-            "stdout": simulated_stdout,
-            "stderr": "",
-            "logs": simulated_logs,
-            "files": list(files.keys()),
-            "archive_base64": archive_base64,
-            "runtime": runtime,
-            "execution_mode": "simulated",
-            "summary": (
-                f"PoC generated and deployed in simulated preview mode! "
-                f"Provide E2B_API_KEY and GEMINI_API_KEY to run in live cloud microVMs."
-            ),
-        }
 
     def get_preview_session(self, sandbox_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve details of an active preview session."""
