@@ -348,6 +348,85 @@ class TestPocSandboxService(unittest.TestCase):
             self.assertEqual(result["execution_mode"], "e2b_error")
             self.assertIn("E2B API unreachable", result["error"])
 
+    def test_send_instruction_success(self):
+        mock_instance = MagicMock(spec=SandboxInstance)
+        mock_instance.sandbox_id = "sbx_active_01"
+        mock_instance.get_preview_url.return_value = (
+            "sbx_active_01-3000.e2b.dev",
+            "https://sbx_active_01-3000.e2b.dev",
+        )
+        mock_instance.run_command.side_effect = [
+            # Pi execution
+            CommandResult(0, "Pi finished updates", ""),
+            # Build / tests verification
+            CommandResult(0, "Build OK", ""),
+            # Server kill
+            CommandResult(0, "", ""),
+            # Server start
+            CommandResult(0, "Server started", ""),
+            # Zip bundle extraction
+            CommandResult(0, "updated_archive_b64", ""),
+        ]
+
+        service = PocSandboxService(gemini_api_key="test_gemini_key")
+        service.active_sandboxes["sbx_active_01"] = {
+            "sandbox_id": "sbx_active_01",
+            "sandbox": mock_instance,
+            "preview_url": "https://sbx_active_01-3000.e2b.dev",
+            "host": "sbx_active_01-3000.e2b.dev",
+            "port": 3000,
+            "runtime": "node",
+            "build_command": "npm run build",
+            "deploy_command": "npm start",
+            "status": "running",
+            "archive_base64": "initial_archive_b64",
+        }
+
+        logs = []
+        result = service.send_instruction(
+            sandbox_id="sbx_active_01",
+            prompt="Add dark mode support",
+            on_log=lambda m: logs.append(m),
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["archive_base64"], "updated_archive_b64")
+        self.assertEqual(
+            service.active_sandboxes["sbx_active_01"]["archive_base64"],
+            "updated_archive_b64",
+        )
+        # Verify pi --continue command was executed
+        first_cmd = mock_instance.run_command.call_args_list[0][0][0]
+        self.assertIn("pi", first_cmd)
+        self.assertIn("--continue", first_cmd)
+        self.assertIn("Add dark mode support", first_cmd)
+        self.assertTrue(any("Add dark mode support" in log for log in logs))
+
+    def test_send_instruction_not_found_or_stopped(self):
+        service = PocSandboxService(gemini_api_key="test_key")
+        with self.assertRaises(ValueError):
+            service.send_instruction("unknown_sbx", "Do something")
+
+        service.active_sandboxes["stopped_sbx"] = {"status": "stopped"}
+        with self.assertRaises(ValueError):
+            service.send_instruction("stopped_sbx", "Do something")
+
+    def test_send_instruction_pi_failure(self):
+        mock_instance = MagicMock(spec=SandboxInstance)
+        mock_instance.sandbox_id = "sbx_fail_01"
+        mock_instance.run_command.return_value = CommandResult(1, "", "Syntax error in pi agent")
+
+        service = PocSandboxService(gemini_api_key="test_key")
+        service.active_sandboxes["sbx_fail_01"] = {
+            "sandbox_id": "sbx_fail_01",
+            "sandbox": mock_instance,
+            "status": "running",
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            service.send_instruction("sbx_fail_01", "Break something")
+        self.assertIn("Pi instruction failed", str(ctx.exception))
+
 
 class TestApiPoc(unittest.TestCase):
     def setUp(self):
@@ -447,3 +526,59 @@ class TestApiPoc(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, sample_bytes)
         self.assertEqual(response.headers["content-type"], "application/zip")
+
+    def test_instruct_poc_agent_endpoint_success(self):
+        self.mock_poc_service.active_sandboxes = {
+            "sbx_instruct_01": {"status": "running"}
+        }
+        self.mock_poc_service.send_instruction.return_value = {
+            "success": True,
+            "sandbox_id": "sbx_instruct_01",
+            "preview_url": "https://sbx_instruct_01.e2b.dev",
+            "summary": "Instruction applied successfully",
+        }
+
+        response = self.client.post(
+            "/api/poc/sbx_instruct_01/instruct",
+            json={"prompt": "Add user profile page"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["sandbox_id"], "sbx_instruct_01")
+        self.mock_poc_service.send_instruction.assert_called_once_with(
+            sandbox_id="sbx_instruct_01", prompt="Add user profile page"
+        )
+
+    def test_instruct_poc_agent_endpoint_stream(self):
+        self.mock_poc_service.active_sandboxes = {
+            "sbx_instruct_02": {"status": "running"}
+        }
+
+        def mock_send(sandbox_id, prompt, on_log=None):
+            if on_log:
+                on_log("Agent working on code...\n")
+            return {
+                "success": True,
+                "sandbox_id": sandbox_id,
+            }
+
+        self.mock_poc_service.send_instruction.side_effect = mock_send
+
+        response = self.client.post(
+            "/api/poc/sbx_instruct_02/instruct?stream=true",
+            json={"prompt": "Add tests for user profile"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/x-ndjson", response.headers["content-type"])
+        body_text = response.text
+        self.assertIn('"type": "log"', body_text)
+        self.assertIn('"type": "result"', body_text)
+
+    def test_instruct_poc_agent_endpoint_not_found(self):
+        self.mock_poc_service.active_sandboxes = {}
+        response = self.client.post(
+            "/api/poc/non_existent_sbx/instruct",
+            json={"prompt": "Add something"},
+        )
+        self.assertEqual(response.status_code, 404)
