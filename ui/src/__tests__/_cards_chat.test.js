@@ -15,7 +15,11 @@ import { fetchSSE } from "../app/_fetch_sse";
 vi.mock("../app/_fetch_sse");
 
 import { getRenderedPrompt } from "../app/_boba_api";
-import { saveContext } from "../app/_local_store";
+import {
+  saveContext,
+  saveProjectCards,
+  saveProjectFollowUps,
+} from "../app/_local_store";
 
 // Import real response data
 import cardsResponseData from "./test_data/cards_response_with_citations.json";
@@ -308,6 +312,28 @@ describe("CardsChat Component", () => {
 
     await waitFor(() => {
       thenFollowUpIsRendered();
+    });
+  });
+
+  it("should restore persisted cards and follow-up results on mount", async () => {
+    saveProjectCards(mockPrompts[0].identifier, someScenarios);
+    saveProjectFollowUps(mockPrompts[0].identifier, {
+      [mockPrompts[0].followUps[0].identifier]: "Persisted follow-up result",
+    });
+
+    await setup();
+
+    expect(screen.getByText(someScenarios[0].title)).toBeInTheDocument();
+
+    const followUpCollapse = screen.getByTestId("follow-up-collapse");
+    fireEvent.click(
+      within(followUpCollapse).getByText(mockPrompts[0].followUps[0].title),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Persisted follow-up result"),
+      ).toBeInTheDocument();
     });
   });
 

@@ -22,6 +22,15 @@ import {
   addToPinboard,
   getSortedUserContexts,
   getSummaryForTheUserContext,
+  getProjectCards,
+  saveProjectCards,
+  deleteProjectCards,
+  getProjectFollowUps,
+  saveProjectFollowUps,
+  deleteProjectFollowUps,
+  deleteProjectChat,
+  getExplorationChatKey,
+  deleteProjectExplorationsForPrompt,
 } from "../app/_local_store";
 import LLMTokenUsage from "../app/_llm_token_usage";
 import PromptPreview from "../app/_prompt_preview";
@@ -110,14 +119,26 @@ const CardsChat = ({
         selectedPromptId.includes("company-research-product-evolution"),
       );
 
+      const savedFollowUps = getProjectFollowUps(selectedPromptId);
       if (firstStepEntry) {
+        const mergedFollowUps = {};
         firstStepEntry.followUps.forEach((followUp) => {
-          followUpResults[followUp.identifier] = "";
+          mergedFollowUps[followUp.identifier] =
+            savedFollowUps?.[followUp.identifier] || "";
         });
-        setFollowUpResults(followUpResults);
+        setFollowUpResults({ ...savedFollowUps, ...mergedFollowUps });
         setSelectedPromptConfiguration(firstStepEntry);
+      } else if (savedFollowUps && typeof savedFollowUps === "object") {
+        setFollowUpResults(savedFollowUps);
       }
       combineAllContexts(contexts);
+      const existingCards = getProjectCards(selectedPromptId);
+      if (Array.isArray(existingCards) && existingCards.length > 0) {
+        setScenarios(existingCards);
+        setIsInputCollapsed(true);
+      } else {
+        setScenarios([]);
+      }
     }
     setUsePromptId(true);
 
@@ -128,10 +149,36 @@ const CardsChat = ({
       combineAllContexts(contexts);
     };
 
+    const handleProjectChange = () => {
+      combineAllContexts(contexts);
+      if (selectedPromptId) {
+        const projectCards = getProjectCards(selectedPromptId);
+        setScenarios(Array.isArray(projectCards) ? projectCards : []);
+        if (Array.isArray(projectCards) && projectCards.length > 0) {
+          setIsInputCollapsed(true);
+        }
+        const projectFollowUps = getProjectFollowUps(selectedPromptId);
+        const firstStepEntry = prompts.find(
+          (entry) => entry.value === selectedPromptId,
+        );
+        const restoredFollowUps = {};
+        firstStepEntry?.followUps?.forEach((followUp) => {
+          restoredFollowUps[followUp.identifier] =
+            projectFollowUps?.[followUp.identifier] || "";
+        });
+        setFollowUpResults({
+          ...(projectFollowUps || {}),
+          ...restoredFollowUps,
+        });
+      }
+    };
+
     window.addEventListener("update-context", handleStorageChange);
+    window.addEventListener("update-project", handleProjectChange);
 
     return () => {
       window.removeEventListener("update-context", handleStorageChange);
+      window.removeEventListener("update-project", handleProjectChange);
     };
   }, [promptId, prompts]);
 
@@ -201,6 +248,7 @@ const CardsChat = ({
       promptid: usePromptId
         ? selectedPromptConfiguration?.identifier
         : undefined,
+      chatSessionId: chatSessionIdCardBuilding,
     };
     attachContextsToRequestBody(requestBody);
 
@@ -249,6 +297,12 @@ const CardsChat = ({
       resetChatSession();
     }
 
+    const baseScenarios = shouldReset
+      ? []
+      : scenarios.map((scenario) => ({
+          ...scenario,
+        }));
+
     const uri = "/api/prompt";
 
     let ms = "";
@@ -268,6 +322,10 @@ const CardsChat = ({
           abortLoad();
         },
         onFinish: () => {
+          const currentPromptId =
+            selectedPromptId ||
+            selectedPromptConfiguration?.identifier ||
+            promptId;
           if (
             ms == "" ||
             (!Array.isArray(output) && !hasShownInvalidResponseWarning)
@@ -275,18 +333,16 @@ const CardsChat = ({
             toast.warning(
               "Model failed to respond rightly, please rewrite your message and try again",
             );
+          } else if (Array.isArray(output) && currentPromptId) {
+            const finalCards = [...baseScenarios, ...output];
+            const savedCards = saveProjectCards(currentPromptId, finalCards);
+            setScenarios(savedCards);
           }
           abortLoad();
         },
         onMessageHandle: (data, response) => {
           const chatId = response.headers.get("X-Chat-ID");
           setChatSessionIdCardBuilding(chatId);
-
-          const existingScenarios = shouldReset
-            ? []
-            : scenarios.map((scenario) => ({
-                ...scenario,
-              }));
 
           // --- NEW: Use filterSSEEvents for all string chunks ---
           if (typeof data === "string") {
@@ -320,7 +376,7 @@ const CardsChat = ({
               console.log("error", error);
             }
             if (Array.isArray(output)) {
-              setScenarios([...existingScenarios, ...output]);
+              setScenarios([...baseScenarios, ...output]);
             } else {
               hasShownInvalidResponseWarning = true;
               abortLoad();
@@ -339,7 +395,7 @@ const CardsChat = ({
     );
   };
 
-  const sendFirstStepPrompt = (shouldReset = true) => {
+  const sendFirstStepPrompt = (shouldReset = false) => {
     setIsInputCollapsed(true);
     sendCardBuildingPrompt(buildRequestDataCardBuilding(), shouldReset);
   };
@@ -404,14 +460,22 @@ const CardsChat = ({
   };
 
   const onFollowUp = (followUpId) => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
     sendFollowUpPrompt(
       "/api/prompt/follow-up",
       (result) => {
         console.log("Ji", result);
-        setFollowUpResults((prevResults) => ({
-          ...prevResults,
-          [followUpId]: result,
-        }));
+        setFollowUpResults((prevResults) => {
+          const updatedResults = {
+            ...prevResults,
+            [followUpId]: result,
+          };
+          if (currentPromptId) {
+            saveProjectFollowUps(currentPromptId, updatedResults);
+          }
+          return updatedResults;
+        });
       },
       followUpId,
       followUpText,
@@ -521,7 +585,7 @@ const CardsChat = ({
           <Form
             onFinish={async () => {
               setIsInputCollapsed(true);
-              sendFirstStepPrompt(true);
+              sendFirstStepPrompt(false);
             }}
             form={form}
             initialValues={{ question: "" }}
@@ -635,23 +699,57 @@ const CardsChat = ({
     </div>
   );
 
+  const updateScenariosAndPersist = (newScenarios) => {
+    setScenarios(newScenarios);
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
+    if (currentPromptId && Array.isArray(newScenarios)) {
+      saveProjectCards(currentPromptId, newScenarios);
+    }
+  };
+
   const onDeleteCard = (index) => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
+    let updatedScenarios;
+    let deletedCard = null;
     if (index.section !== undefined) {
       if (index.card !== undefined) {
+        deletedCard = scenarios[index.section]?.scenarios?.[index.card];
         scenarios[index.section].scenarios = scenarios[
           index.section
         ].scenarios.filter((_, i) => i !== index.card);
-        setScenarios([...scenarios]);
+        updatedScenarios = [...scenarios];
       } else {
-        const updatedScenarios = scenarios.filter(
+        updatedScenarios = scenarios.filter(
           (_, i) => i !== index.section,
         );
-        setScenarios(updatedScenarios);
       }
     } else {
-      const updatedScenarios = scenarios.filter((_, i) => i !== index.card);
-      setScenarios(updatedScenarios);
+      deletedCard = scenarios[index.card];
+      updatedScenarios = scenarios.filter((_, i) => i !== index.card);
     }
+    if (currentPromptId && deletedCard) {
+      const cardKey = deletedCard.id || deletedCard.title;
+      if (cardKey) {
+        deleteProjectChat(getExplorationChatKey(currentPromptId, cardKey));
+      }
+    }
+    updateScenariosAndPersist(updatedScenarios);
+  };
+
+  const onClearAllCards = () => {
+    const currentPromptId =
+      selectedPromptId || selectedPromptConfiguration?.identifier || promptId;
+    setScenarios([]);
+    setCardExplorationDrawerOpen(false);
+    resetChatSession();
+    if (currentPromptId) {
+      deleteProjectCards(currentPromptId);
+      deleteProjectFollowUps(currentPromptId);
+      deleteProjectExplorationsForPrompt(currentPromptId);
+    }
+    toast.info("Cleared all cards for this prompt.");
   };
 
   const perplexityModelName = { chat: { name: "Perplexity AI" } };
@@ -692,11 +790,12 @@ const CardsChat = ({
                 isGenerating={isGenerating}
                 featureToggleConfig={featureToggleConfig}
                 scenarios={scenarios}
-                setScenarios={setScenarios}
+                setScenarios={updateScenariosAndPersist}
                 editable={selectedPromptConfiguration.editable}
                 onExplore={onExplore}
                 stopLoadComponent={<StopLoad />}
                 onDelete={onDeleteCard}
+                onClearAll={onClearAllCards}
               />
               {inputAreaRender()}
               {scenarios.length > 0 && !isCompanyResearch && (
@@ -718,7 +817,7 @@ const CardsChat = ({
                   featureToggleConfig={featureToggleConfig}
                   chatSessionIdCardBuilding={chatSessionIdCardBuilding}
                   scenarios={scenarios}
-                  setScenarios={setScenarios}
+                  setScenarios={updateScenariosAndPersist}
                   selectedPromptConfiguration={selectedPromptConfiguration}
                   setEnableGenerateMoreCards={setEnableGenerateMoreCards}
                   setIsGenerating={setIsGenerating}

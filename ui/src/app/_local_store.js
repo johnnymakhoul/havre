@@ -156,9 +156,15 @@ export const deleteProject = (projectId) => {
   if (typeof localStorage.removeItem === "function") {
     localStorage.removeItem(`pinboard_${projectId}`);
     localStorage.removeItem(`context_${projectId}`);
+    localStorage.removeItem(`cards_${projectId}`);
+    localStorage.removeItem(`chats_${projectId}`);
+    localStorage.removeItem(`follow_ups_${projectId}`);
   } else {
     localStorage.setItem(`pinboard_${projectId}`, JSON.stringify({}));
     localStorage.setItem(`context_${projectId}`, JSON.stringify([]));
+    localStorage.setItem(`cards_${projectId}`, JSON.stringify({}));
+    localStorage.setItem(`chats_${projectId}`, JSON.stringify({}));
+    localStorage.setItem(`follow_ups_${projectId}`, JSON.stringify({}));
   }
   syncWithBackend(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
@@ -185,6 +191,322 @@ const getContextStorageKey = (projectId = null) => {
     : "context";
 };
 
+export const getCardsStorageKey = (projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `cards_${activeId}`
+    : "cards";
+};
+
+export const getProjectCards = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getCardsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const cardsMap = raw ? JSON.parse(raw) : {};
+    if (promptId) {
+      return cardsMap[promptId] || [];
+    }
+    return cardsMap || {};
+  } catch (e) {
+    return promptId ? [] : {};
+  }
+};
+
+export const saveProjectCards = (promptId, cards, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getCardsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const cardsMap = raw ? JSON.parse(raw) : {};
+    const now = Date.now();
+    const normalizedCards = Array.isArray(cards)
+      ? cards.map((card, idx) => ({
+          ...card,
+          id: card?.id || `card-${now}-${idx}`,
+        }))
+      : [];
+    cardsMap[promptId] = normalizedCards;
+    localStorage.setItem(storageKey, JSON.stringify(cardsMap));
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/cards`, {
+      method: "POST",
+      body: JSON.stringify({ promptId, cards: normalizedCards }),
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-cards", {
+          detail: { promptId, cards: normalizedCards, projectId: activeId },
+        }),
+      );
+    }
+    return normalizedCards;
+  } catch (e) {
+    console.error("Failed to save project cards", e);
+    return cards;
+  }
+};
+
+export const deleteProjectCards = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getCardsStorageKey(activeId);
+    if (promptId) {
+      const raw = localStorage.getItem(storageKey);
+      const cardsMap = raw ? JSON.parse(raw) : {};
+      delete cardsMap[promptId];
+      localStorage.setItem(storageKey, JSON.stringify(cardsMap));
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/cards?promptId=${encodeURIComponent(promptId)}`,
+        { method: "DELETE" },
+      );
+    } else {
+      localStorage.removeItem(storageKey);
+      syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/cards`, {
+        method: "DELETE",
+      });
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("update-cards"));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const getChatsStorageKey = (projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `chats_${activeId}`
+    : "chats";
+};
+
+export const getProjectChat = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getChatsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const chatsMap = raw ? JSON.parse(raw) : {};
+    if (promptId) {
+      return chatsMap[promptId] || null;
+    }
+    return chatsMap || {};
+  } catch (e) {
+    return promptId ? null : {};
+  }
+};
+
+export const saveProjectChat = (promptId, chatData, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const resolvedPrompt = promptId || "default";
+    const storageKey = getChatsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const chatsMap = raw ? JSON.parse(raw) : {};
+    const payload = {
+      chatSessionId: chatData?.chatSessionId,
+      messages: Array.isArray(chatData?.messages) ? chatData.messages : [],
+      tokenUsage: chatData?.tokenUsage || {
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+      updatedAt: chatData?.updatedAt || Date.now(),
+    };
+    chatsMap[resolvedPrompt] = payload;
+    localStorage.setItem(storageKey, JSON.stringify(chatsMap));
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/chats`, {
+      method: "POST",
+      body: JSON.stringify({
+        promptId: resolvedPrompt,
+        ...payload,
+      }),
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-chats", {
+          detail: {
+            promptId: resolvedPrompt,
+            chat: payload,
+            projectId: activeId,
+          },
+        }),
+      );
+    }
+    return payload;
+  } catch (e) {
+    console.error("Failed to save project chat", e);
+    return chatData;
+  }
+};
+
+export const deleteProjectChat = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getChatsStorageKey(activeId);
+    if (promptId) {
+      const raw = localStorage.getItem(storageKey);
+      const chatsMap = raw ? JSON.parse(raw) : {};
+      delete chatsMap[promptId];
+      localStorage.setItem(storageKey, JSON.stringify(chatsMap));
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/chats?promptId=${encodeURIComponent(promptId)}`,
+        { method: "DELETE" },
+      );
+    } else {
+      if (typeof localStorage.removeItem === "function") {
+        localStorage.removeItem(storageKey);
+      } else {
+        localStorage.setItem(storageKey, JSON.stringify({}));
+      }
+      syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/chats`, {
+        method: "DELETE",
+      });
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("update-chats"));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const getExplorationChatKey = (promptId, cardKey) => {
+  const resolvedPrompt = promptId || "default";
+  const resolvedCard = cardKey || "default";
+  return `explore:${resolvedPrompt}:${resolvedCard}`;
+};
+
+export const deleteProjectExplorationsForPrompt = (
+  promptId,
+  projectId = null,
+) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getChatsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const chatsMap = raw ? JSON.parse(raw) : {};
+    const prefix = `explore:${promptId || "default"}:`;
+    const matchingKeys = Object.keys(chatsMap).filter((k) =>
+      k.startsWith(prefix),
+    );
+    matchingKeys.forEach((key) => {
+      delete chatsMap[key];
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/chats?promptId=${encodeURIComponent(key)}`,
+        { method: "DELETE" },
+      );
+    });
+    localStorage.setItem(storageKey, JSON.stringify(chatsMap));
+    if (typeof window !== "undefined" && matchingKeys.length > 0) {
+      window.dispatchEvent(new Event("update-chats"));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const getFollowUpsStorageKey = (projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `follow_ups_${activeId}`
+    : "follow_ups";
+};
+
+export const getProjectFollowUps = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getFollowUpsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const followUpsMap = raw ? JSON.parse(raw) : {};
+    if (promptId) {
+      return followUpsMap[promptId] || {};
+    }
+    return followUpsMap || {};
+  } catch (e) {
+    return {};
+  }
+};
+
+export const saveProjectFollowUps = (
+  promptId,
+  followUps,
+  projectId = null,
+) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const resolvedPrompt = promptId || "default";
+    const storageKey = getFollowUpsStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const followUpsMap = raw ? JSON.parse(raw) : {};
+    const payload =
+      followUps && typeof followUps === "object" ? { ...followUps } : {};
+    followUpsMap[resolvedPrompt] = payload;
+    localStorage.setItem(storageKey, JSON.stringify(followUpsMap));
+    syncWithBackend(
+      `/api/projects/${encodeURIComponent(activeId)}/follow-ups`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          promptId: resolvedPrompt,
+          followUps: payload,
+        }),
+      },
+    );
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-follow-ups", {
+          detail: {
+            promptId: resolvedPrompt,
+            followUps: payload,
+            projectId: activeId,
+          },
+        }),
+      );
+    }
+    return payload;
+  } catch (e) {
+    console.error("Failed to save project follow-ups", e);
+    return followUps;
+  }
+};
+
+export const deleteProjectFollowUps = (promptId = null, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getFollowUpsStorageKey(activeId);
+    if (promptId) {
+      const raw = localStorage.getItem(storageKey);
+      const followUpsMap = raw ? JSON.parse(raw) : {};
+      delete followUpsMap[promptId];
+      localStorage.setItem(storageKey, JSON.stringify(followUpsMap));
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/follow-ups?promptId=${encodeURIComponent(promptId)}`,
+        { method: "DELETE" },
+      );
+    } else {
+      if (typeof localStorage.removeItem === "function") {
+        localStorage.removeItem(storageKey);
+      } else {
+        localStorage.setItem(storageKey, JSON.stringify({}));
+      }
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/follow-ups`,
+        {
+          method: "DELETE",
+        },
+      );
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("update-follow-ups"));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 export const hydrateFromBackend = async () => {
   const serverState = await syncWithBackend("/api/persistence/state", {
     method: "GET",
@@ -196,7 +518,10 @@ export const hydrateFromBackend = async () => {
   const serverHasCustomData =
     serverState.projects.length > 1 ||
     Object.keys(serverState.pinboard || {}).length > 0 ||
-    Object.keys(serverState.contexts || {}).length > 0;
+    Object.keys(serverState.contexts || {}).length > 0 ||
+    Object.keys(serverState.cards || {}).length > 0 ||
+    Object.keys(serverState.chats || {}).length > 0 ||
+    Object.keys(serverState.followUps || {}).length > 0;
 
   if (serverHasCustomData) {
     localStorage.setItem("projects", JSON.stringify(serverState.projects));
@@ -219,15 +544,45 @@ export const hydrateFromBackend = async () => {
         );
       });
     }
+    if (serverState.cards && typeof serverState.cards === "object") {
+      Object.entries(serverState.cards).forEach(([projId, cards]) => {
+        localStorage.setItem(
+          getCardsStorageKey(projId),
+          JSON.stringify(cards || {}),
+        );
+      });
+    }
+    if (serverState.chats && typeof serverState.chats === "object") {
+      Object.entries(serverState.chats).forEach(([projId, chats]) => {
+        localStorage.setItem(
+          getChatsStorageKey(projId),
+          JSON.stringify(chats || {}),
+        );
+      });
+    }
+    if (serverState.followUps && typeof serverState.followUps === "object") {
+      Object.entries(serverState.followUps).forEach(([projId, followUps]) => {
+        localStorage.setItem(
+          getFollowUpsStorageKey(projId),
+          JSON.stringify(followUps || {}),
+        );
+      });
+    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("update-project"));
       window.dispatchEvent(new Event("update-context"));
+      window.dispatchEvent(new Event("update-cards"));
+      window.dispatchEvent(new Event("update-chats"));
+      window.dispatchEvent(new Event("update-follow-ups"));
     }
   } else {
     // Migrate existing localStorage data to server if present
     const localProjects = getProjects();
     const pinboardByProject = {};
     const contextsByProject = {};
+    const cardsByProject = {};
+    const chatsByProject = {};
+    const followUpsByProject = {};
     localProjects.forEach((p) => {
       const pins =
         JSON.parse(localStorage.getItem(getPinboardStorageKey(p.id))) || {};
@@ -239,11 +594,29 @@ export const hydrateFromBackend = async () => {
       if (ctxs.length > 0) {
         contextsByProject[p.id] = ctxs;
       }
+      const cards =
+        JSON.parse(localStorage.getItem(getCardsStorageKey(p.id))) || {};
+      if (Object.keys(cards).length > 0) {
+        cardsByProject[p.id] = cards;
+      }
+      const chats =
+        JSON.parse(localStorage.getItem(getChatsStorageKey(p.id))) || {};
+      if (Object.keys(chats).length > 0) {
+        chatsByProject[p.id] = chats;
+      }
+      const followUps =
+        JSON.parse(localStorage.getItem(getFollowUpsStorageKey(p.id))) || {};
+      if (Object.keys(followUps).length > 0) {
+        followUpsByProject[p.id] = followUps;
+      }
     });
     if (
       localProjects.length > 1 ||
       Object.keys(pinboardByProject).length > 0 ||
-      Object.keys(contextsByProject).length > 0
+      Object.keys(contextsByProject).length > 0 ||
+      Object.keys(cardsByProject).length > 0 ||
+      Object.keys(chatsByProject).length > 0 ||
+      Object.keys(followUpsByProject).length > 0
     ) {
       await syncWithBackend("/api/persistence/state", {
         method: "PUT",
@@ -252,6 +625,9 @@ export const hydrateFromBackend = async () => {
           activeProjectId: getActiveProjectId(),
           pinboard: pinboardByProject,
           contexts: contextsByProject,
+          cards: cardsByProject,
+          chats: chatsByProject,
+          followUps: followUpsByProject,
         }),
       });
     }

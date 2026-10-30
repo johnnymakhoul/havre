@@ -16,6 +16,17 @@ import {
   deleteProject,
   hydrateFromBackend,
   DEFAULT_PROJECT_SECTIONS,
+  getProjectCards,
+  saveProjectCards,
+  deleteProjectCards,
+  getProjectChat,
+  saveProjectChat,
+  deleteProjectChat,
+  getExplorationChatKey,
+  deleteProjectExplorationsForPrompt,
+  getProjectFollowUps,
+  saveProjectFollowUps,
+  deleteProjectFollowUps,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -505,6 +516,312 @@ describe("Local Store", () => {
       expect(getActiveProject().name).toBe("Server Project");
       expect(getPinboardData()[0].summary).toBe("Server pinned note");
       expect(getSortedUserContexts()[0].title).toBe("Server Context");
+
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe("Cards management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return empty array when no cards exist for prompt", () => {
+      expect(getProjectCards("prompt-1")).toEqual([]);
+    });
+
+    it("should save cards and retrieve them by prompt and project", () => {
+      const cards = [
+        { title: "Candidate A", summary: "Modular Monolith" },
+        { title: "Candidate B", summary: "Microservices" },
+      ];
+
+      saveProjectCards("prompt-1", cards);
+
+      const retrieved = getProjectCards("prompt-1");
+      expect(retrieved).toHaveLength(2);
+      expect(retrieved[0].title).toBe("Candidate A");
+    });
+
+    it("should isolate cards between different projects", () => {
+      saveProjectCards("prompt-1", [{ title: "Default Card" }], "default");
+      saveProjectCards("prompt-1", [{ title: "Proj 2 Card" }], "project-2");
+
+      expect(getProjectCards("prompt-1", "default")[0].title).toBe("Default Card");
+      expect(getProjectCards("prompt-1", "project-2")[0].title).toBe("Proj 2 Card");
+    });
+
+    it("should delete cards for a specific prompt", () => {
+      saveProjectCards("prompt-1", [{ title: "Card 1" }]);
+      saveProjectCards("prompt-2", [{ title: "Card 2" }]);
+
+      deleteProjectCards("prompt-1");
+
+      expect(getProjectCards("prompt-1")).toEqual([]);
+      expect(getProjectCards("prompt-2")).toHaveLength(1);
+    });
+
+    it("should hydrate cards from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {
+          default: {
+            "prompt-arch": [{ title: "Hydrated Card", summary: "From server" }],
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const cards = getProjectCards("prompt-arch", "default");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].title).toBe("Hydrated Card");
+
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe("Chats management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return null when no chat exists for prompt", () => {
+      expect(getProjectChat("prompt-1")).toBeNull();
+    });
+
+    it("should save chat and retrieve it by prompt and project", () => {
+      const chatData = {
+        chatSessionId: "boba-chat-101",
+        messages: [
+          { id: "1", role: "user", content: "Hello" },
+          { id: "2", role: "assistant", content: "Hi there!" },
+        ],
+        tokenUsage: { input_tokens: 10, output_tokens: 20 },
+      };
+
+      saveProjectChat("prompt-1", chatData);
+
+      const retrieved = getProjectChat("prompt-1");
+      expect(retrieved.chatSessionId).toBe("boba-chat-101");
+      expect(retrieved.messages).toHaveLength(2);
+      expect(retrieved.messages[1].content).toBe("Hi there!");
+    });
+
+    it("should isolate chats between different projects", () => {
+      saveProjectChat(
+        "prompt-1",
+        {
+          chatSessionId: "session-def",
+          messages: [{ id: "1", role: "assistant", content: "Default reply" }],
+        },
+        "default",
+      );
+      saveProjectChat(
+        "prompt-1",
+        {
+          chatSessionId: "session-p2",
+          messages: [{ id: "1", role: "assistant", content: "Proj 2 reply" }],
+        },
+        "project-2",
+      );
+
+      expect(getProjectChat("prompt-1", "default").messages[0].content).toBe(
+        "Default reply",
+      );
+      expect(getProjectChat("prompt-1", "project-2").messages[0].content).toBe(
+        "Proj 2 reply",
+      );
+    });
+
+    it("should delete chat for a specific prompt", () => {
+      saveProjectChat("prompt-1", {
+        chatSessionId: "s1",
+        messages: [{ id: "1", role: "user", content: "Msg 1" }],
+      });
+      saveProjectChat("prompt-2", {
+        chatSessionId: "s2",
+        messages: [{ id: "2", role: "user", content: "Msg 2" }],
+      });
+
+      deleteProjectChat("prompt-1");
+
+      expect(getProjectChat("prompt-1")).toBeNull();
+      expect(getProjectChat("prompt-2").chatSessionId).toBe("s2");
+    });
+
+    it("should hydrate chats from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {},
+        chats: {
+          default: {
+            "prompt-chat-1": {
+              chatSessionId: "server-session-1",
+              messages: [
+                { id: "m1", role: "user", content: "From server user" },
+                { id: "m2", role: "assistant", content: "From server AI" },
+              ],
+            },
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const chat = getProjectChat("prompt-chat-1", "default");
+      expect(chat.chatSessionId).toBe("server-session-1");
+      expect(chat.messages).toHaveLength(2);
+      expect(chat.messages[1].content).toBe("From server AI");
+
+      fetchSpy.mockRestore();
+    });
+
+    it("should build exploration chat keys and delete all explorations for a prompt", () => {
+      const key1 = getExplorationChatKey("prompt-a", "card-1");
+      const key2 = getExplorationChatKey("prompt-a", "card-2");
+      const keyOther = getExplorationChatKey("prompt-b", "card-1");
+
+      expect(key1).toBe("explore:prompt-a:card-1");
+
+      saveProjectChat(key1, {
+        chatSessionId: "exp-1",
+        messages: [{ id: "1", role: "assistant", content: "Explore 1" }],
+      });
+      saveProjectChat(key2, {
+        chatSessionId: "exp-2",
+        messages: [{ id: "2", role: "assistant", content: "Explore 2" }],
+      });
+      saveProjectChat(keyOther, {
+        chatSessionId: "exp-other",
+        messages: [{ id: "3", role: "assistant", content: "Explore Other" }],
+      });
+
+      deleteProjectExplorationsForPrompt("prompt-a");
+
+      expect(getProjectChat(key1)).toBeNull();
+      expect(getProjectChat(key2)).toBeNull();
+      expect(getProjectChat(keyOther)?.chatSessionId).toBe("exp-other");
+    });
+  });
+
+  describe("Follow-ups management", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.clearAllMocks();
+    });
+
+    it("should return empty object when no follow-ups exist for prompt", () => {
+      expect(getProjectFollowUps("prompt-1")).toEqual({});
+    });
+
+    it("should save follow-ups and retrieve them by prompt and project", () => {
+      const followUps = {
+        "follow-1": "Follow-up 1 markdown output",
+        "follow-2": "Follow-up 2 markdown output",
+      };
+
+      saveProjectFollowUps("prompt-1", followUps);
+
+      const retrieved = getProjectFollowUps("prompt-1");
+      expect(retrieved["follow-1"]).toBe("Follow-up 1 markdown output");
+      expect(retrieved["follow-2"]).toBe("Follow-up 2 markdown output");
+    });
+
+    it("should isolate follow-ups between different projects", () => {
+      saveProjectFollowUps("prompt-1", { f1: "Default follow-up" }, "default");
+      saveProjectFollowUps(
+        "prompt-1",
+        { f1: "Project 2 follow-up" },
+        "project-2",
+      );
+
+      expect(getProjectFollowUps("prompt-1", "default").f1).toBe(
+        "Default follow-up",
+      );
+      expect(getProjectFollowUps("prompt-1", "project-2").f1).toBe(
+        "Project 2 follow-up",
+      );
+    });
+
+    it("should delete follow-ups for a specific prompt", () => {
+      saveProjectFollowUps("prompt-1", { f1: "Output 1" });
+      saveProjectFollowUps("prompt-2", { f2: "Output 2" });
+
+      deleteProjectFollowUps("prompt-1");
+
+      expect(getProjectFollowUps("prompt-1")).toEqual({});
+      expect(getProjectFollowUps("prompt-2").f2).toBe("Output 2");
+    });
+
+    it("should hydrate follow-ups from backend state", async () => {
+      const serverPayload = {
+        projects: [
+          {
+            id: "default",
+            name: "Default Project",
+            description: "Default workspace project",
+            sections: DEFAULT_PROJECT_SECTIONS,
+            isDefault: true,
+          },
+        ],
+        activeProjectId: "default",
+        pinboard: {},
+        contexts: {},
+        cards: {},
+        chats: {},
+        followUps: {
+          default: {
+            "prompt-arch": {
+              "follow-up-a": "Hydrated follow-up response",
+            },
+          },
+        },
+      };
+
+      const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => serverPayload,
+      });
+
+      await hydrateFromBackend();
+
+      const followUps = getProjectFollowUps("prompt-arch", "default");
+      expect(followUps["follow-up-a"]).toBe("Hydrated follow-up response");
 
       fetchSpy.mockRestore();
     });

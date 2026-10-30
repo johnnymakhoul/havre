@@ -2,9 +2,10 @@
 "use client";
 import { ProChatProvider } from "@ant-design/pro-chat";
 import { useEffect, useState, useRef } from "react";
-import { Input, Select } from "antd";
+import { Button, Input, Popconfirm, Select } from "antd";
 import { toast } from "react-toastify";
 import { DownOutlined } from "@ant-design/icons";
+import { RiDeleteBinLine } from "react-icons/ri";
 
 const { TextArea } = Input;
 import ChatWidget from "./_chat";
@@ -14,6 +15,10 @@ import ContextChoice from "./_context_choice";
 import ChatHeader from "../pages/_chat_header";
 import PromptPreview from "./_prompt_preview";
 import {
+  getActiveProjectId,
+  getProjectChat,
+  saveProjectChat,
+  deleteProjectChat,
   getSortedUserContexts,
   getSummaryForTheUserContext,
 } from "./_local_store";
@@ -47,16 +52,46 @@ const PromptChat = ({
   const [userInput, setUserInput] = useState(initialInput);
 
   // Chat state
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [chatSessionId, setChatSessionId] = useState(undefined);
+  const resolvedPromptKey =
+    promptId || selectedPrompt?.identifier || "default";
+  const [activeProjectId, setActiveProjectId] = useState(() =>
+    getActiveProjectId(),
+  );
+  const [resetKey, setResetKey] = useState(0);
+  const [initialChats, setInitialChats] = useState(() => {
+    const saved = getProjectChat(promptId || "default");
+    return Array.isArray(saved?.messages) ? saved.messages : [];
+  });
+  const [conversationStarted, setConversationStarted] = useState(() => {
+    const saved = getProjectChat(promptId || "default");
+    return Array.isArray(saved?.messages) && saved.messages.length > 0;
+  });
+  const [chatSessionId, setChatSessionId] = useState(() => {
+    const saved = getProjectChat(promptId || "default");
+    return saved?.chatSessionId;
+  });
   const [usePromptId, setUsePromptId] = useState(true);
   const [placeholder, setPlaceholder] = useState("");
   const [allContexts, setAllContexts] = useState([]);
   // Aggregate token usage per page
-  const [tokenUsage, setTokenUsage] = useState({
-    input_tokens: 0,
-    output_tokens: 0,
+  const [tokenUsage, setTokenUsage] = useState(() => {
+    const saved = getProjectChat(promptId || "default");
+    return saved?.tokenUsage || { input_tokens: 0, output_tokens: 0 };
   });
+
+  const latestSessionIdRef = useRef(chatSessionId);
+  const latestTokenUsageRef = useRef(tokenUsage);
+  const latestMessagesRef = useRef(initialChats);
+  const hadPersistedMessagesRef = useRef(initialChats.length > 0);
+  const previousPromptIdRef = useRef(promptId);
+
+  useEffect(() => {
+    latestSessionIdRef.current = chatSessionId;
+  }, [chatSessionId]);
+
+  useEffect(() => {
+    latestTokenUsageRef.current = tokenUsage;
+  }, [tokenUsage]);
 
   const MAX_COUNT = 3;
   function combineAllContexts(contexts) {
@@ -79,19 +114,54 @@ const PromptChat = ({
     }
     combineAllContexts(contexts);
 
-    // Reset token usage aggregation on mount (page load)
-    setTokenUsage({ input_tokens: 0, output_tokens: 0 });
-
     const handleStorageChange = () => {
       combineAllContexts(contexts);
     };
 
+    const loadChatForCurrentProjectAndPrompt = () => {
+      const currentProjectId = getActiveProjectId();
+      const targetPromptKey = promptId || "default";
+      const saved = getProjectChat(targetPromptKey, currentProjectId);
+      const savedMessages = Array.isArray(saved?.messages)
+        ? saved.messages
+        : [];
+      const hasSaved = savedMessages.length > 0;
+      const restoredUsage = saved?.tokenUsage || {
+        input_tokens: 0,
+        output_tokens: 0,
+      };
+
+      setActiveProjectId(currentProjectId);
+      setInitialChats(savedMessages);
+      setConversationStarted(hasSaved);
+      setChatSessionId(hasSaved ? saved?.chatSessionId : undefined);
+      setTokenUsage(restoredUsage);
+
+      latestMessagesRef.current = savedMessages;
+      latestSessionIdRef.current = hasSaved ? saved?.chatSessionId : undefined;
+      latestTokenUsageRef.current = restoredUsage;
+      hadPersistedMessagesRef.current = hasSaved;
+      setResetKey((prev) => prev + 1);
+    };
+
+    const handleProjectChange = () => {
+      combineAllContexts(contexts);
+      loadChatForCurrentProjectAndPrompt();
+    };
+
+    if (previousPromptIdRef.current !== promptId) {
+      previousPromptIdRef.current = promptId;
+      loadChatForCurrentProjectAndPrompt();
+    }
+
     window.addEventListener("update-context", handleStorageChange);
+    window.addEventListener("update-project", handleProjectChange);
 
     return () => {
       window.removeEventListener("update-context", handleStorageChange);
+      window.removeEventListener("update-project", handleProjectChange);
     };
-  }, [initialInput, contexts]);
+  }, [initialInput, contexts, promptId]);
 
   const appendImageDescription = (userInput) => {
     if (imageDescription && imageDescription !== "") {
@@ -132,9 +202,59 @@ const PromptChat = ({
 
   const startNewChat = async (userInput) => {
     if (chatRef.current) {
+      deleteProjectChat(resolvedPromptKey);
+      latestSessionIdRef.current = undefined;
+      latestMessagesRef.current = [];
+      hadPersistedMessagesRef.current = false;
       setChatSessionId(undefined);
       setConversationStarted(false);
       chatRef.current.startNewConversation(userInput);
+    }
+  };
+
+  const onClearChat = () => {
+    deleteProjectChat(resolvedPromptKey);
+    latestSessionIdRef.current = undefined;
+    latestMessagesRef.current = [];
+    latestTokenUsageRef.current = { input_tokens: 0, output_tokens: 0 };
+    hadPersistedMessagesRef.current = false;
+    setInitialChats([]);
+    setChatSessionId(undefined);
+    setConversationStarted(false);
+    setTokenUsage({ input_tokens: 0, output_tokens: 0 });
+    setResetKey((prev) => prev + 1);
+    toast.info("Cleared conversation for this prompt.");
+  };
+
+  const handleChatsChange = (nextChats) => {
+    if (!Array.isArray(nextChats)) return;
+    latestMessagesRef.current = nextChats;
+
+    if (nextChats.length === 0) {
+      if (hadPersistedMessagesRef.current) {
+        hadPersistedMessagesRef.current = false;
+        deleteProjectChat(resolvedPromptKey);
+        latestSessionIdRef.current = undefined;
+        setChatSessionId(undefined);
+        setConversationStarted(false);
+      }
+      return;
+    }
+
+    const hasAssistantResponse = nextChats.some(
+      (m) => m.role === "assistant" && m.content && m.content !== "...",
+    );
+    const isUpdateToPersisted =
+      hadPersistedMessagesRef.current &&
+      nextChats.every((m) => m.content !== "...");
+
+    if (hasAssistantResponse || isUpdateToPersisted) {
+      hadPersistedMessagesRef.current = true;
+      saveProjectChat(resolvedPromptKey, {
+        chatSessionId: latestSessionIdRef.current,
+        messages: nextChats,
+        tokenUsage: latestTokenUsageRef.current,
+      });
     }
   };
 
@@ -175,12 +295,17 @@ const PromptChat = ({
         throw new Error(`ERROR: ${detailedErrorMessage}`);
       }
 
-      const chatId = response.headers.get("X-Chat-ID");
+      const chatId =
+        response.headers.get("X-Chat-ID") || response.headers.get("X-Chat-Id");
       setPlaceholder("");
 
       if (!conversationStarted) {
         setConversationStarted(true);
         setChatSessionId(chatId);
+        latestSessionIdRef.current = chatId;
+      } else if (chatId && !latestSessionIdRef.current) {
+        setChatSessionId(chatId);
+        latestSessionIdRef.current = chatId;
       }
 
       // Create a stream that filters out token usage events and extracts clean content for ProChat
@@ -210,7 +335,21 @@ const PromptChat = ({
               events.forEach((event) => {
                 if (event.type === "token_usage") {
                   const usage = formattedUsage(event.data);
-                  setTokenUsage((prev) => aggregateTokenUsage(prev, usage));
+                  setTokenUsage((prev) => {
+                    const updated = aggregateTokenUsage(prev, usage);
+                    latestTokenUsageRef.current = updated;
+                    if (
+                      hadPersistedMessagesRef.current &&
+                      latestMessagesRef.current.length > 0
+                    ) {
+                      saveProjectChat(resolvedPromptKey, {
+                        chatSessionId: latestSessionIdRef.current,
+                        messages: latestMessagesRef.current,
+                        tokenUsage: updated,
+                      });
+                    }
+                    return updated;
+                  });
                 }
               });
               buffer = "";
@@ -339,6 +478,25 @@ const PromptChat = ({
         />
       </h3>
       {selectedPrompt && <DownloadPrompt prompt={selectedPrompt} />}
+      {conversationStarted && (
+        <Popconfirm
+          title="Clear conversation"
+          description="Are you sure you want to clear this conversation?"
+          onConfirm={onClearChat}
+          okText="Yes, clear"
+          cancelText="Cancel"
+          okButtonProps={{ danger: true }}
+        >
+          <Button
+            type="link"
+            danger
+            className="clear-all"
+            data-testid="clear-chat-button"
+          >
+            <RiDeleteBinLine fontSize="large" /> CLEAR CHAT
+          </Button>
+        </Popconfirm>
+      )}
       <LLMTokenUsage
         tokenUsage={tokenUsage}
         featureToggleConfig={featureToggleConfig}
@@ -371,7 +529,10 @@ const PromptChat = ({
           <ChatHeader models={models} titleComponent={title} />
           <div className="chat-container">
             <div className="chat-widget-container">
-              <ProChatProvider>
+              <ProChatProvider
+                key={`${activeProjectId}-${resolvedPromptKey}-${resetKey}`}
+                initialChats={initialChats}
+              >
                 <ChatWidget
                   onSubmitMessage={submitPromptToBackend}
                   ref={chatRef}
@@ -379,6 +540,7 @@ const PromptChat = ({
                   promptPreviewComponent={promptPreview}
                   advancedPromptingMenu={advancedPromptingMenu}
                   conversationStarted={conversationStarted}
+                  onChatsChange={handleChatsChange}
                 />
               </ProChatProvider>
             </div>

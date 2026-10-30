@@ -29,6 +29,7 @@ const ChatWidget = forwardRef(
       promptPreviewComponent,
       advancedPromptingMenu,
       conversationStarted,
+      onChatsChange,
     },
     ref,
   ) => {
@@ -267,6 +268,7 @@ const ChatWidget = forwardRef(
           locale="en-US"
           helloMessage={helloMessage || "Let me help you with your task!"}
           request={onSubmit}
+          onChatsChange={onChatsChange}
           chatItemRenderConfig={{
             contentRender: (props, _defaultDom) => {
               if (props.loading) {

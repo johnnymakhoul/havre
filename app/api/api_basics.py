@@ -114,6 +114,11 @@ class HaivenBaseApi:
                     # Send error in JSON format for JSON chat
                     error_response = {"data": f"[ERROR]: {error_msg}"}
                     yield json.dumps(error_response)
+                finally:
+                    if hasattr(self.chat_manager, "chat_session_memory"):
+                        self.chat_manager.chat_session_memory._persist_session(
+                            chat_session_key_value
+                        )
 
             chat_session_key_value, chat_session = self.chat_manager.json_chat(
                 model_config=model_config or self.model_config,
@@ -208,6 +213,11 @@ class HaivenBaseApi:
                     )
                     print(f"[ERROR]: {error_msg}")
                     yield f"[ERROR]: {error_msg}"
+                finally:
+                    if hasattr(self.chat_manager, "chat_session_memory"):
+                        self.chat_manager.chat_session_memory._persist_session(
+                            chat_session_key_value
+                        )
 
             chat_session_key_value, chat_session = self.chat_manager.streaming_chat(
                 model_config=model_config or self.model_config,
