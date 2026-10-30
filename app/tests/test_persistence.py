@@ -1,10 +1,17 @@
 # © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
+import json
 import os
 import tempfile
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from persistence.data_repository import DataRepository, DEFAULT_PROJECT_SECTIONS
+from persistence.data_repository import (
+    DataRepository,
+    DataRepositoryInterface,
+    JsonDataRepository,
+    SqliteDataRepository,
+    DEFAULT_PROJECT_SECTIONS,
+)
 from api.api_persistence import ApiPersistence
 
 
@@ -340,6 +347,120 @@ def test_follow_ups_repository_methods_and_endpoints():
         res = client.get("/api/persistence/state")
         assert res.status_code == 200
         assert "followUps" in res.json()
+
+
+def test_sqlite_auto_migrates_legacy_json_file():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        legacy_json_path = os.path.join(tmpdir, "haiven_data.json")
+        legacy_state = {
+            "projects": [
+                {
+                    "id": "default",
+                    "name": "Default Project",
+                    "description": "Default workspace project",
+                    "sections": DEFAULT_PROJECT_SECTIONS,
+                    "isDefault": True,
+                },
+                {
+                    "id": "legacy-proj",
+                    "name": "Legacy JSON Project",
+                    "description": "Migrated from JSON",
+                    "sections": ["research"],
+                    "isDefault": False,
+                },
+            ],
+            "activeProjectId": "legacy-proj",
+            "pinboard": {
+                "legacy-proj": {
+                    "p1": {"content": "Legacy pin", "isUserDefined": True}
+                }
+            },
+            "contexts": {
+                "legacy-proj": [
+                    {
+                        "title": "Legacy Context",
+                        "summary": "From flat file",
+                        "timestamp": 17000001,
+                        "isUserDefined": True,
+                    }
+                ]
+            },
+            "cards": {
+                "legacy-proj": {
+                    "prompt-1": [{"id": "c1", "title": "Legacy Card"}]
+                }
+            },
+            "chats": {
+                "legacy-proj": {
+                    "prompt-chat": {
+                        "chatSessionId": "legacy-session",
+                        "messages": [{"id": "m1", "role": "user", "content": "Hi"}],
+                    }
+                }
+            },
+            "followUps": {
+                "legacy-proj": {
+                    "prompt-1": {"fu-1": "Legacy follow-up markdown"}
+                }
+            },
+        }
+        with open(legacy_json_path, "w", encoding="utf-8") as f:
+            json.dump(legacy_state, f)
+
+        repo = DataRepository(file_path=legacy_json_path)
+        assert repo.db_path.endswith("haiven_data.db")
+        assert os.path.exists(repo.db_path)
+        assert repo.get_active_project_id() == "legacy-proj"
+        assert repo.get_pinboard("legacy-proj")["p1"]["content"] == "Legacy pin"
+        assert repo.get_contexts("legacy-proj")[0]["title"] == "Legacy Context"
+        assert repo.get_cards("legacy-proj", "prompt-1")[0]["title"] == "Legacy Card"
+        assert (
+            repo.get_chats("legacy-proj", "prompt-chat")["chatSessionId"]
+            == "legacy-session"
+        )
+        assert (
+            repo.get_follow_ups("legacy-proj", "prompt-1")["fu-1"]
+            == "Legacy follow-up markdown"
+        )
+
+
+def test_common_interface_with_json_and_sqlite_implementations():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        json_path = os.path.join(tmpdir, "json_store.json")
+        sqlite_path = os.path.join(tmpdir, "sqlite_store.db")
+
+        json_repo = DataRepository(file_path=json_path, repo_type="json")
+        sqlite_repo = DataRepository(file_path=sqlite_path, repo_type="sqlite")
+
+        assert isinstance(json_repo.repository, JsonDataRepository)
+        assert isinstance(sqlite_repo.repository, SqliteDataRepository)
+        assert isinstance(json_repo.repository, DataRepositoryInterface)
+        assert isinstance(sqlite_repo.repository, DataRepositoryInterface)
+
+        for repo in (json_repo, sqlite_repo):
+            repo.add_project({"id": "proj-x", "name": "Project X"})
+            repo.save_cards(
+                "proj-x", "prompt-x", [{"id": "c-1", "title": "Card X"}]
+            )
+            repo.save_chat(
+                "proj-x",
+                "prompt-x",
+                {
+                    "chatSessionId": "sess-x",
+                    "messages": [{"id": "1", "role": "user", "content": "Hi"}],
+                },
+            )
+            repo.save_follow_ups("proj-x", "prompt-x", {"f-1": "Follow-up X"})
+
+            assert repo.get_active_project_id() == "proj-x"
+            assert repo.get_cards("proj-x", "prompt-x")[0]["title"] == "Card X"
+            assert (
+                repo.get_chats("proj-x", "prompt-x")["chatSessionId"]
+                == "sess-x"
+            )
+            assert repo.get_follow_ups("proj-x", "prompt-x")["f-1"] == "Follow-up X"
+
+
 
 
 
