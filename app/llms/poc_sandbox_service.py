@@ -305,7 +305,7 @@ class PocSandboxService:
             pi_command = (
                 "cd /home/user/app && "
                 f"pi --provider google --model {model_name} "
-                "--mode json -p --no-session "
+                "--mode json -p "
                 + shlex.quote(prompt)
             )
             log(f"Executing Pi coding agent with Google Gemini ({model_name})...")
@@ -425,6 +425,12 @@ class PocSandboxService:
                     "host": host,
                     "port": preview_port,
                     "adr_title": adr_title,
+                    "runtime": runtime,
+                    "build_command": build_command,
+                    "test_command": test_command,
+                    "deploy_command": deploy_command,
+                    "gemini_key": gemini_key,
+                    "agent_timeout_seconds": agent_timeout_seconds,
                     "created_at": datetime.datetime.now(
                         datetime.timezone.utc
                     ).isoformat(),
@@ -505,3 +511,155 @@ class PocSandboxService:
         session["status"] = "stopped"
         del self.active_sandboxes[sandbox_id]
         return True
+
+    def send_instruction(
+        self,
+        sandbox_id: str,
+        prompt: str,
+        on_log: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Send follow-up conversational instructions to the Pi coding agent in an active sandbox."""
+        session = self.active_sandboxes.get(sandbox_id)
+        if not session or session.get("status") != "running":
+            raise ValueError(
+                f"Active sandbox session '{sandbox_id}' not found or already stopped."
+            )
+
+        sandbox = session.get("sandbox")
+        if not sandbox:
+            raise ValueError(
+                f"Sandbox instance for session '{sandbox_id}' is not available."
+            )
+
+        all_logs = []
+
+        def log(msg: str):
+            all_logs.append(msg)
+            if on_log:
+                try:
+                    on_log(msg if msg.endswith("\n") else msg + "\n")
+                except Exception:
+                    pass
+
+        log(f"\n>>> User Instruction: {prompt.strip()}\n----------------------------------------")
+
+        gemini_key = session.get("gemini_key") or self.get_gemini_api_key() or ""
+        agent_timeout = session.get("agent_timeout_seconds") or 900
+        preview_port = session.get("port") or 3000
+        build_command = session.get("build_command")
+        deploy_command = session.get("deploy_command")
+        runtime = session.get("runtime") or "node"
+
+        model_name = os.environ.get("ENABLED_CHAT_MODEL") or "gemini-3.8-flash"
+        pi_command = (
+            "cd /home/user/app && "
+            f"pi --provider google --model {model_name} "
+            "--mode json -p --continue "
+            + shlex.quote(prompt)
+        )
+
+        log(f"Executing Pi coding agent with Google Gemini ({model_name}) [continuation]...")
+        pi_result = sandbox.run_command(
+            pi_command,
+            envs={"GEMINI_API_KEY": gemini_key},
+            timeout=agent_timeout,
+            on_stdout=lambda text: log(text),
+            on_stderr=lambda text: log(text),
+        )
+
+        if pi_result.exit_code != 0:
+            err_msg = f"Pi instruction failed (exit code {pi_result.exit_code}): {pi_result.stderr or pi_result.stdout}"
+            log(err_msg)
+            raise RuntimeError(err_msg)
+
+        # Re-run build & automated tests
+        log("Re-verifying application build and automated tests...")
+        if not build_command:
+            if runtime.lower() in ["node", "javascript", "typescript", "react"]:
+                build_command = (
+                    "cd /home/user/app && npm run build 2>/dev/null || node --test 2>/dev/null || true"
+                )
+            else:
+                build_command = (
+                    "cd /home/user/app && python3 -m unittest discover . 2>/dev/null || true"
+                )
+
+        build_res = sandbox.run_command(
+            build_command,
+            timeout=300,
+            on_stdout=lambda text: log(text),
+            on_stderr=lambda text: log(text),
+        )
+
+        if build_res.exit_code != 0:
+            log(
+                f"Notice: Verification returned exit code {build_res.exit_code}: {build_res.stderr}"
+            )
+
+        # Restart background preview server
+        log(f"Restarting live preview server on port {preview_port}...")
+        sandbox.run_command(
+            f"fuser -k {preview_port}/tcp 2>/dev/null || lsof -ti:{preview_port} | xargs kill -9 2>/dev/null || true",
+            timeout=30,
+        )
+
+        if not deploy_command:
+            deploy_command = (
+                f"cd /home/user/app && "
+                f"if [ -f package.json ] && grep -q '\"start\"' package.json; then npm start; "
+                f"elif [ -f server.js ]; then node server.js; "
+                f"elif [ -f app.js ]; then node app.js; "
+                f"elif [ -f index.js ]; then node index.js; "
+                f"elif [ -f main.py ]; then python3 main.py; "
+                f"else python3 -m http.server {preview_port}; fi"
+            )
+
+        sandbox.run_command(
+            deploy_command,
+            background=True,
+            timeout=0,
+        )
+        log(f"Preview server restarted successfully on port {preview_port}")
+
+        host, public_url = sandbox.get_preview_url(preview_port)
+
+        # Re-bundle zip codebase
+        archive_base64 = session.get("archive_base64")
+        try:
+            zip_res = sandbox.run_command(
+                'cd /home/user/app && python3 -c "'
+                "import base64, io, os, zipfile; "
+                "buf = io.BytesIO(); "
+                "zf = zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED); "
+                "[zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), '.')) "
+                " for r, d, fs in os.walk('.') if 'node_modules' not in r and '.git' not in r for f in fs]; "
+                "zf.close(); "
+                "print(base64.b64encode(buf.getvalue()).decode('utf-8'))"
+                '"',
+                timeout=30,
+            )
+            if (
+                zip_res
+                and getattr(zip_res, "exit_code", 1) == 0
+                and isinstance(getattr(zip_res, "stdout", None), str)
+                and zip_res.stdout.strip()
+            ):
+                archive_base64 = zip_res.stdout.strip()
+                session["archive_base64"] = archive_base64
+        except Exception as e:
+            logger.warning(f"Could not re-extract updated codebase: {e}")
+
+        result_payload = {
+            "success": True,
+            "sandbox_id": sandbox_id,
+            "preview_url": public_url,
+            "host": host,
+            "preview_port": preview_port,
+            "exit_code": 0,
+            "stdout": pi_result.stdout,
+            "stderr": pi_result.stderr,
+            "logs": "\n".join(all_logs),
+            "archive_base64": archive_base64,
+            "summary": "Instruction applied successfully and preview refreshed.",
+        }
+        return result_payload

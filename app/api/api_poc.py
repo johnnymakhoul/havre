@@ -26,6 +26,10 @@ class PocExecutionRequest(BaseModel):
     keep_alive_for_preview: Optional[bool] = True
 
 
+class PocInstructionRequest(BaseModel):
+    prompt: str
+
+
 class ApiPoc:
     def __init__(
         self,
@@ -183,3 +187,75 @@ class ApiPoc:
                 media_type="application/zip",
                 headers={"Content-Disposition": f"attachment; filename=poc_{sandbox_id}.zip"},
             )
+
+        @app.post("/api/poc/{sandbox_id}/instruct")
+        async def instruct_poc_agent(
+            request: Request, sandbox_id: str, body: PocInstructionRequest
+        ):
+            """Send follow-up instructions to the coding agent running in an active sandbox."""
+            session = self.poc_service.active_sandboxes.get(sandbox_id)
+            if not session or session.get("status") != "running":
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Active preview sandbox {sandbox_id} not found or stopped",
+                )
+
+            if request.query_params.get("stream") == "true":
+                import asyncio
+                import json
+                import queue
+                from fastapi.responses import StreamingResponse
+
+                log_queue = queue.Queue()
+
+                def run_task():
+                    try:
+                        def on_log(text: str):
+                            log_queue.put({"type": "log", "message": text})
+
+                        res = self.poc_service.send_instruction(
+                            sandbox_id=sandbox_id,
+                            prompt=body.prompt,
+                            on_log=on_log,
+                        )
+                        log_queue.put({"type": "result", "data": res})
+                    except Exception as exc:
+                        log_queue.put({"type": "error", "message": str(exc)})
+                    finally:
+                        log_queue.put(None)
+
+                threading.Thread(target=run_task, daemon=True).start()
+
+                async def event_generator():
+                    while True:
+                        try:
+                            item = log_queue.get_nowait()
+                        except queue.Empty:
+                            await asyncio.sleep(0.08)
+                            continue
+
+                        if item is None:
+                            break
+
+                        yield json.dumps(item) + "\n"
+
+                return StreamingResponse(
+                    event_generator(),
+                    media_type="application/x-ndjson",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            try:
+                result = self.poc_service.send_instruction(
+                    sandbox_id=sandbox_id,
+                    prompt=body.prompt,
+                )
+                return JSONResponse(result)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500, detail=f"Instruction execution failed: {str(e)}"
+                )

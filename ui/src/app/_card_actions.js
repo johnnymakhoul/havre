@@ -10,6 +10,7 @@ import {
   RiExternalLinkLine,
   RiStopCircleLine,
   RiDownload2Line,
+  RiSendPlaneFill,
 } from "react-icons/ri";
 import {
   Button,
@@ -20,10 +21,15 @@ import {
   Tag,
   Space,
   Alert,
+  Input,
 } from "antd";
 import { toast } from "react-toastify";
 import { scenarioToText } from "./_dynamic_data_renderer";
-import { executePocSpikeStream, stopPocPreview } from "./_boba_api";
+import {
+  executePocSpikeStream,
+  stopPocPreview,
+  sendPocInstructionStream,
+} from "./_boba_api";
 import React, { useState, useRef, useEffect } from "react";
 
 export default function CardActions({
@@ -42,6 +48,8 @@ export default function CardActions({
   const [pocResult, setPocResult] = useState(null);
   const [pocLogs, setPocLogs] = useState("");
   const [isStopping, setIsStopping] = useState(false);
+  const [followUpPrompt, setFollowUpPrompt] = useState("");
+  const [isSendingInstruction, setIsSendingInstruction] = useState(false);
   const logsContainerRef = useRef(null);
 
   useEffect(() => {
@@ -195,6 +203,50 @@ export default function CardActions({
       link.click();
       document.body.removeChild(link);
     }
+  };
+
+  const handleSendInstruction = async () => {
+    if (
+      !followUpPrompt.trim() ||
+      !pocResult ||
+      !pocResult.sandbox_id ||
+      isSendingInstruction ||
+      pocLoading
+    ) {
+      return;
+    }
+    const promptToSend = followUpPrompt.trim();
+    setFollowUpPrompt("");
+    setIsSendingInstruction(true);
+
+    const marker = `\n\n========================================\n>>> User Instruction: ${promptToSend}\n========================================\n`;
+    setPocLogs((prev) => prev + marker);
+
+    sendPocInstructionStream(
+      pocResult.sandbox_id,
+      promptToSend,
+      (logChunk) => {
+        setPocLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setIsSendingInstruction(false);
+        if (result) {
+          setPocResult((prev) => ({
+            ...prev,
+            ...result,
+          }));
+          if (result.logs && result.logs.length > pocLogs.length) {
+            setPocLogs(result.logs);
+          }
+        }
+        toast.success("Agent instruction applied successfully!");
+      },
+      (err) => {
+        setIsSendingInstruction(false);
+        setPocLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`Instruction failed: ${err.message}`);
+      },
+    );
   };
 
   return (
@@ -361,6 +413,71 @@ export default function CardActions({
               <Button icon={<RiDownload2Line />} onClick={downloadArchive}>
                 Download Codebase (.zip)
               </Button>
+            </div>
+          )}
+
+          {pocResult && pocResult.sandbox_id && !pocResult.stopped && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                backgroundColor: "#f8fafc",
+                borderRadius: "8px",
+                border: "1px solid #e2e8f0",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "8px",
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    color: "#334155",
+                  }}
+                >
+                  Prompt Coding Agent in Sandbox:
+                </span>
+                {isSendingInstruction && (
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#1677ff",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <Spin size="small" /> Agent working on instruction...
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <Input
+                  data-testid="poc-instruction-input"
+                  placeholder="Send follow-up instruction (e.g. 'Add a search bar', 'Make tests pass')..."
+                  value={followUpPrompt}
+                  onChange={(e) => setFollowUpPrompt(e.target.value)}
+                  onPressEnter={handleSendInstruction}
+                  disabled={isSendingInstruction || pocLoading}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  type="primary"
+                  icon={<RiSendPlaneFill />}
+                  loading={isSendingInstruction}
+                  disabled={!followUpPrompt.trim() || pocLoading}
+                  onClick={handleSendInstruction}
+                  data-testid="poc-instruction-send"
+                >
+                  Send
+                </Button>
+              </div>
             </div>
           )}
 
