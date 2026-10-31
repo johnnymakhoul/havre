@@ -111,12 +111,12 @@ const mockResponseHeadersWithChatId = {
 
 const mockOnDelete = vi.fn();
 
-const setup = async () => {
+const setup = async (customPrompts = mockPrompts) => {
   await act(async () => {
     render(
       <CardsChat
         promptId={mockPrompts[0].identifier}
-        prompts={mockPrompts}
+        prompts={customPrompts}
         contexts={mockContexts}
         models={mockModels}
         featureToggleConfig={mockFeatureToggleConfig}
@@ -363,6 +363,38 @@ describe("CardsChat Component", () => {
     await selectContext("User Context 1");
     await selectContext("User Context 2");
     await selectContext("Context 1");
+
+    givenUserInput(someUserInput);
+    await whenSendIsClicked();
+    expect(fetchSSE).toHaveBeenCalledTimes(1);
+  }, 20000);
+
+  it("should fetch cards chat response with filled section context when selected", async () => {
+    saveProjectCards("prior-reqs", [
+      { id: "c1", title: "API Gateway", summary: "Use rate limiting" },
+    ]);
+
+    const thenFirstPromptRequestHappensWithSectionContext = (bodyString) => {
+      const body = JSON.parse(bodyString);
+      expect(body.userContext).toContain("### Section: Requirements Breakdown");
+      expect(body.userContext).toContain("#### API Gateway\nUse rate limiting");
+    };
+
+    fetchSSE.mockImplementationOnce((url, options) => {
+      thenFirstPromptRequestHappensWithSectionContext(options.body);
+    });
+
+    await setup([
+      ...mockPrompts,
+      { identifier: "prior-reqs", title: "Requirements Breakdown" },
+    ]);
+
+    clickAdvancedPrompt();
+
+    const contextDropdown = screen.getByTestId("context-select").firstChild;
+    fireEvent.mouseDown(contextDropdown);
+
+    await selectContext("Requirements Breakdown");
 
     givenUserInput(someUserInput);
     await whenSendIsClicked();

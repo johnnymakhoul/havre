@@ -38,6 +38,7 @@ import MarkdownRenderer from "../app/_markdown_renderer";
 import { scenarioToText } from "../app/_dynamic_data_renderer";
 import EnrichCard from "../app/_enrich_card";
 import Citations from "../pages/_citations";
+import { resolveContextsForRequestBody } from "../app/utils/_context_helper";
 import DownloadPrompt from "../app/_download_prompt";
 import { formattedUsage } from "../app/utils/tokenUtils";
 import { aggregateTokenUsage } from "../app/utils/_aggregate_token_usage";
@@ -225,17 +226,13 @@ const CardsChat = ({
   };
 
   const attachContextsToRequestBody = (requestBody) => {
-    const userContextsSummary = selectedContexts
-      .filter((context) => context.isUserDefined)
-      .map((context) => getSummaryForTheUserContext(context.value))
-      .join("\n\n");
+    const { knowledgePackContexts, userContext } = resolveContextsForRequestBody(
+      selectedContexts,
+      { prompts },
+    );
 
-    const knowledgePackContexts = selectedContexts
-      .map((context) => (!context.isUserDefined ? context.value : null))
-      .filter((value) => value !== null);
-
-    if (userContextsSummary !== "") {
-      requestBody.userContext = userContextsSummary;
+    if (userContext !== "") {
+      requestBody.userContext = userContext;
     }
     if (knowledgePackContexts.length > 0) {
       requestBody.contexts = knowledgePackContexts;
@@ -561,10 +558,7 @@ const CardsChat = ({
     };
 
     const handleContextSelection = (values) => {
-      const selectedContexts = allContexts.filter((context) =>
-        values.includes(context.value),
-      );
-      setSelectedContexts(selectedContexts);
+      setSelectedContexts(values);
     };
 
     const advancedPromptingMenu = (
@@ -572,8 +566,9 @@ const CardsChat = ({
         <div className="requirement-user-input">
           <ContextChoice
             onChange={handleContextSelection}
-            contexts={allContexts}
+            contexts={contexts}
             selectedContexts={selectedContexts}
+            prompts={prompts}
           />
         </div>
       </div>

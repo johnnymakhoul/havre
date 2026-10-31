@@ -1,7 +1,6 @@
 // © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { vi } from "vitest";
 import ContextChoice from "../app/_context_choice";
 
 describe("ContextChoice Component", () => {
@@ -60,12 +59,10 @@ describe("ContextChoice Component", () => {
     expect(within(select).queryByText("Context 3")).not.toBeInTheDocument();
   });
 
-  it("should not allow user to select more than 3 which is the maximum count", async () => {
+  it("should allow selecting more than 3 items without hard limit restriction", async () => {
     render(<ContextChoice contexts={mockContexts} selectedContexts={[]} />);
     const select = screen.getByTestId("context-select").firstChild;
     fireEvent.mouseDown(select);
-
-    verifyAddContextLink();
 
     const option1 = await screen.findByText("Context 1");
     fireEvent.click(option1);
@@ -81,6 +78,46 @@ describe("ContextChoice Component", () => {
 
     const option4 = await screen.findByText("Context 4");
     fireEvent.click(option4);
-    expect(within(select).queryByText("Context 4")).not.toBeInTheDocument();
+    expect(within(select).getByText("Context 4")).toBeInTheDocument();
+  });
+
+  it("should render filled project sections and their items in tree", async () => {
+    const customTree = [
+      {
+        title: "Project Prompts",
+        value: "group::project-sections",
+        key: "group::project-sections",
+        selectable: false,
+        checkable: false,
+        children: [
+          {
+            title: "Requirements Breakdown",
+            value: "section::req-breakdown",
+            key: "section::req-breakdown",
+            children: [
+              {
+                title: "User Authentication",
+                value: "card::req-breakdown::card-1",
+                key: "card::req-breakdown::card-1",
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <ContextChoice
+        contexts={[]}
+        selectedContexts={[]}
+        treeData={customTree}
+      />,
+    );
+
+    const select = screen.getByTestId("context-select").firstChild;
+    fireEvent.mouseDown(select);
+
+    expect(screen.getByText("Requirements Breakdown")).toBeInTheDocument();
+    expect(screen.getByText("User Authentication")).toBeInTheDocument();
   });
 });
