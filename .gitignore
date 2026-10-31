@@ -13,7 +13,7 @@ dist/
 build/
 *.egg-info/
 *.egg
-
+.next/
 # IDEs and editors
 .idea/
 *.suo

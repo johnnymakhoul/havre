@@ -13,6 +13,7 @@ import {
   saveContext,
   saveProjectChat,
   getProjectChat,
+  saveProjectCards,
   addProject,
   setActiveProject,
 } from "../app/_local_store";
@@ -482,6 +483,51 @@ describe("PromptChat Component", () => {
       expect(screen.getByTestId("clear-chat-button")).toBeInTheDocument();
     });
   }, 20000);
+
+  it("should include filled section cards in userContext when selected", async () => {
+    saveProjectCards("req-prompt", [
+      { id: "c1", title: "Auth Feature", summary: "Use OAuth 2.0" },
+    ]);
+    const mockResponse = "AI response";
+    const fetchMock = setupFetchMock(mockResponse);
+
+    render(
+      <PromptChat
+        promptId={mockPrompts[0].identifier}
+        prompts={[
+          ...mockPrompts,
+          { identifier: "req-prompt", title: "Requirements Breakdown" },
+        ]}
+        contexts={mockContexts}
+        documents={mockDocuments}
+        models={mockModels}
+      />,
+    );
+
+    clickAdvancedPrompt();
+    const contextDropdown = screen.getByTestId("context-select").firstChild;
+    fireEvent.mouseDown(contextDropdown);
+
+    await selectContext("Requirements Breakdown");
+    givenUserInput();
+
+    const sendButton = screen.getByRole("button", { name: "SEND" });
+    fireEvent.click(sendButton);
+
+    await waitFor(
+      () => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/prompt",
+          expect.any(Object),
+        );
+        const fetchOptions = fetchMock.mock.calls[0][1];
+        const body = JSON.parse(fetchOptions.body);
+        expect(body.userContext).toContain("### Section: Requirements Breakdown");
+        expect(body.userContext).toContain("#### Auth Feature\nUse OAuth 2.0");
+      },
+      { timeout: 20000 },
+    );
+  });
 
   //TODO:
   //test for checking chat actions are working correctly

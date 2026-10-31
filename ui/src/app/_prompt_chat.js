@@ -22,6 +22,7 @@ import {
   getSortedUserContexts,
   getSummaryForTheUserContext,
 } from "./_local_store";
+import { resolveContextsForRequestBody } from "./utils/_context_helper";
 import DownloadPrompt from "./_download_prompt";
 import LLMTokenUsage from "./_llm_token_usage";
 import { formattedUsage } from "../app/utils/tokenUtils";
@@ -171,17 +172,13 @@ const PromptChat = ({
   };
 
   const attachContextsToRequestBody = (requestBody) => {
-    const userContextsSummary = selectedContexts
-      .filter((context) => context.isUserDefined)
-      .map((context) => getSummaryForTheUserContext(context.value))
-      .join("\n\n");
+    const { knowledgePackContexts, userContext } = resolveContextsForRequestBody(
+      selectedContexts,
+      { prompts, activeProjectId },
+    );
 
-    const knowledgePackContexts = selectedContexts
-      .map((context) => (!context.isUserDefined ? context.value : null))
-      .filter((value) => value !== null);
-
-    if (userContextsSummary !== "") {
-      requestBody.userContext = userContextsSummary;
+    if (userContext !== "") {
+      requestBody.userContext = userContext;
     }
     if (knowledgePackContexts.length > 0) {
       requestBody.contexts = knowledgePackContexts;
@@ -386,10 +383,7 @@ const PromptChat = ({
   }
 
   const handleContextSelection = (values) => {
-    const userSelectedContexts = allContexts.filter((context) =>
-      values.includes(context.value),
-    );
-    setSelectedContexts(userSelectedContexts);
+    setSelectedContexts(values);
   };
 
   useEffect(() => {
@@ -459,7 +453,9 @@ const PromptChat = ({
     <ContextChoice
       onChange={handleContextSelection}
       selectedContexts={selectedContexts}
-      contexts={allContexts}
+      contexts={contexts}
+      prompts={prompts}
+      activeProjectId={activeProjectId}
     />
   ) : (
     <></>
