@@ -15,6 +15,7 @@ import ProjectSelector from "../app/_project_selector";
 
 const Sidebar = ({ prompts, featureToggleConfig }) => {
   const pathToKey = {
+    "/workflow": "workflow",
     "/scenarios": "scenarios",
     "/creative-matrix": "creative-matrix",
     "/knowledge-chat": "knowledgeChat",

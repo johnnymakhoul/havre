@@ -146,6 +146,13 @@ class SqliteDataRepository(DataRepositoryInterface):
                             updated_at INTEGER NOT NULL,
                             PRIMARY KEY (project_id)
                         );
+
+                        CREATE TABLE IF NOT EXISTS project_workflows (
+                            project_id TEXT NOT NULL,
+                            workflow_json TEXT NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            PRIMARY KEY (project_id)
+                        );
                         """
                     )
 
@@ -265,6 +272,18 @@ class SqliteDataRepository(DataRepositoryInterface):
                     proj_fu = follow_ups.setdefault(r["project_id"], {})
                     proj_fu[r["prompt_id"]] = json.loads(r["follow_ups_json"])
 
+                tasks: Dict[str, List[Dict[str, Any]]] = {}
+                for r in conn.execute(
+                    "SELECT project_id, tasks_json FROM project_tasks"
+                ).fetchall():
+                    tasks[r["project_id"]] = json.loads(r["tasks_json"])
+
+                workflows: Dict[str, Dict[str, Any]] = {}
+                for r in conn.execute(
+                    "SELECT project_id, workflow_json FROM project_workflows"
+                ).fetchall():
+                    workflows[r["project_id"]] = json.loads(r["workflow_json"])
+
                 return {
                     "projects": projects,
                     "activeProjectId": active_id,
@@ -274,6 +293,8 @@ class SqliteDataRepository(DataRepositoryInterface):
                     "cards": cards,
                     "chats": chats,
                     "followUps": follow_ups,
+                    "tasks": tasks,
+                    "workflows": workflows,
                 }
             finally:
                 self._close(conn)
@@ -390,6 +411,26 @@ class SqliteDataRepository(DataRepositoryInterface):
                                             now_ms,
                                         ),
                                     )
+
+                    if "tasks" in state and isinstance(state["tasks"], dict):
+                        conn.execute("DELETE FROM project_tasks")
+                        now_ms = int(time.time() * 1000)
+                        for proj_id, task_list in state["tasks"].items():
+                            if isinstance(task_list, list):
+                                conn.execute(
+                                    "INSERT INTO project_tasks (project_id, tasks_json, updated_at) VALUES (?, ?, ?)",
+                                    (proj_id, json.dumps(task_list), now_ms),
+                                )
+
+                    if "workflows" in state and isinstance(state["workflows"], dict):
+                        conn.execute("DELETE FROM project_workflows")
+                        now_ms = int(time.time() * 1000)
+                        for proj_id, wf_obj in state["workflows"].items():
+                            if isinstance(wf_obj, dict):
+                                conn.execute(
+                                    "INSERT INTO project_workflows (project_id, workflow_json, updated_at) VALUES (?, ?, ?)",
+                                    (proj_id, json.dumps(wf_obj), now_ms),
+                                )
             finally:
                 self._close(conn)
 
@@ -544,6 +585,14 @@ class SqliteDataRepository(DataRepositoryInterface):
                     )
                     conn.execute(
                         "DELETE FROM prompt_follow_ups WHERE project_id = ?",
+                        (project_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM project_tasks WHERE project_id = ?",
+                        (project_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM project_workflows WHERE project_id = ?",
                         (project_id,),
                     )
                     active_row = conn.execute(
@@ -1185,6 +1234,75 @@ class SqliteDataRepository(DataRepositoryInterface):
                 with conn:
                     cursor = conn.execute(
                         "DELETE FROM project_tasks WHERE project_id = ?",
+                        (target_project,),
+                    )
+                    return cursor.rowcount > 0
+            finally:
+                self._close(conn)
+
+    def get_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT workflow_json FROM project_workflows WHERE project_id = ?",
+                    (target_project,),
+                ).fetchone()
+                if row and row["workflow_json"]:
+                    return json.loads(row["workflow_json"])
+                return None
+            finally:
+                self._close(conn)
+
+    def save_workflow(
+        self,
+        project_id: Optional[str],
+        workflow: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            now_ms = int(time.time() * 1000)
+
+            workflow_copy = (
+                copy.deepcopy(workflow) if isinstance(workflow, dict) else {}
+            )
+            workflow_copy["projectId"] = target_project
+            workflow_copy["updatedAt"] = now_ms
+
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO project_workflows
+                        (project_id, workflow_json, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            target_project,
+                            json.dumps(workflow_copy),
+                            now_ms,
+                        ),
+                    )
+                return copy.deepcopy(workflow_copy)
+            finally:
+                self._close(conn)
+
+    def delete_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            conn = self._connect()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "DELETE FROM project_workflows WHERE project_id = ?",
                         (target_project,),
                     )
                     return cursor.rowcount > 0

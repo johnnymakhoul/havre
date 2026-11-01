@@ -35,6 +35,8 @@ class DataRepositoryInterface(ABC):
             "cards": {},
             "chats": {},
             "followUps": {},
+            "tasks": {},
+            "workflows": {},
         }
 
     def _ensure_default_project(
@@ -243,6 +245,28 @@ class DataRepositoryInterface(ABC):
 
     @abstractmethod
     def delete_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        pass
+
+    @abstractmethod
+    def get_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def save_workflow(
+        self,
+        project_id: Optional[str],
+        workflow: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def delete_workflow(
         self,
         project_id: Optional[str] = None,
     ) -> bool:

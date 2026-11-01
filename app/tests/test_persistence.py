@@ -504,6 +504,73 @@ def test_common_interface_with_json_and_sqlite_implementations():
             assert repo.get_follow_ups("proj-x", "prompt-x")["f-1"] == "Follow-up X"
 
 
+def test_workflow_repository_methods_and_endpoints():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        json_path = os.path.join(tmpdir, "workflow_store.json")
+        sqlite_path = os.path.join(tmpdir, "workflow_store.db")
+
+        for file_path, repo_type in [
+            (json_path, "json"),
+            (sqlite_path, "sqlite"),
+        ]:
+            repo = DataRepository(file_path=file_path, repo_type=repo_type)
+            app = FastAPI()
+            ApiPersistence(app, repo)
+            client = TestClient(app)
+
+            # 1. Initial workflow should be empty
+            res = client.get("/api/workflow")
+            assert res.status_code == 200
+            assert res.json() == {}
+
+            # 2. Save workflow on active project
+            wf_payload = {
+                "status": "in-progress",
+                "activeStepIndex": 1,
+                "stages": [
+                    {"key": "research", "status": "completed", "cards": [{"title": "Card 1"}]},
+                    {"key": "specification", "status": "in-review", "cards": []},
+                ],
+                "cumulativeContext": "## Research Summary",
+            }
+            res = client.post("/api/workflow", json={"workflow": wf_payload})
+            assert res.status_code == 200
+            saved = res.json()
+            assert saved["status"] == "in-progress"
+            assert saved["activeStepIndex"] == 1
+            assert saved["projectId"] == "default"
+            assert "updatedAt" in saved
+
+            # 3. Get workflow by project ID
+            res = client.get("/api/projects/default/workflow")
+            assert res.status_code == 200
+            retrieved = res.json()
+            assert retrieved["activeStepIndex"] == 1
+            assert len(retrieved["stages"]) == 2
+
+            # 4. Save workflow for a specific project
+            repo.add_project({"id": "proj-wf", "name": "Workflow Project"})
+            res = client.post(
+                "/api/projects/proj-wf/workflow",
+                json={"workflow": {"status": "completed", "activeStepIndex": 2}},
+            )
+            assert res.status_code == 200
+            assert res.json()["projectId"] == "proj-wf"
+
+            res = client.get("/api/projects/proj-wf/workflow")
+            assert res.status_code == 200
+            assert res.json()["status"] == "completed"
+
+            # 5. Delete workflow
+            res = client.delete("/api/projects/proj-wf/workflow")
+            assert res.status_code == 200
+            assert res.json()["deleted"] is True
+
+            res = client.get("/api/projects/proj-wf/workflow")
+            assert res.status_code == 200
+            assert res.json() == {}
+
+
 
 
 

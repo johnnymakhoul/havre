@@ -15,6 +15,7 @@ import {
   RiGlobalLine,
   RiBriefcase2Line,
   RiKanbanView2,
+  RiSparkling2Line,
 } from "react-icons/ri";
 
 // Keeping the implementation of menu items for the "static" features in one place
@@ -252,6 +253,11 @@ export const initialiseMenuCategoriesForSidebar = (
       label: <Link href="/">Dashboard</Link>,
       icon: <RiDashboardHorizontalLine style={{ fontSize: "large" }} />,
     },
+    workflow: {
+      key: "workflow",
+      label: <Link href="/workflow">Project Workflow</Link>,
+      icon: <RiSparkling2Line style={{ fontSize: "large" }} />,
+    },
     tasks: {
       key: "tasks",
       label: <Link href="/tasks">Tasks</Link>,
@@ -274,6 +280,15 @@ export const initialiseMenuCategoriesForSidebar = (
 
 export const staticFeaturesForDashboard = () => {
   return [
+    {
+      identifier: "project-automation-workflow",
+      title: "Project Automation Workflow",
+      help_prompt_description:
+        "Chain project sections end-to-end with autonomous AI generation, Human-in-the-Loop review gates, and executive dossier synthesis.",
+      categories: ["project-management", "research", "specification"],
+      type: "static",
+      link: "/workflow",
+    },
     {
       identifier: "boba-creative-matrix",
       title: "Creative Matrix",

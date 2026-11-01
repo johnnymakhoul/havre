@@ -273,6 +273,7 @@ describe("Sidebar Component", () => {
       // Verify that items are sorted alphabetically regardless of icon presence
       expect(itemTexts).toEqual([
         "Dashboard",
+        "Project Workflow",
         "Tasks",
         "Chat with Haiven",
         "Company Research Analysis",
