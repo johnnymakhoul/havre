@@ -44,6 +44,8 @@ class StateSyncRequest(BaseModel):
     cards: Optional[Dict[str, Any]] = None
     chats: Optional[Dict[str, Any]] = None
     followUps: Optional[Dict[str, Any]] = None
+    tasks: Optional[Dict[str, Any]] = None
+    workflows: Optional[Dict[str, Any]] = None
 
 
 class SaveCardsRequest(BaseModel):
@@ -97,6 +99,10 @@ class SaveFollowUpsRequest(BaseModel):
 
 class SaveTasksRequest(BaseModel):
     tasks: List[Dict[str, Any]] = []
+
+
+class SaveWorkflowRequest(BaseModel):
+    workflow: Dict[str, Any] = {}
 
 
 
@@ -441,6 +447,46 @@ class ApiPersistence:
         @self.app.delete("/api/tasks")
         def delete_active_project_tasks():
             deleted = self.data_repository.delete_tasks(
+                project_id=self.data_repository.get_active_project_id(),
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/projects/{project_id}/workflow")
+        def get_project_workflow(project_id: str):
+            workflow = self.data_repository.get_workflow(project_id=project_id)
+            return workflow or {}
+
+        @self.app.post("/api/projects/{project_id}/workflow")
+        def save_project_workflow(
+            project_id: str, request: SaveWorkflowRequest
+        ):
+            return self.data_repository.save_workflow(
+                project_id=project_id,
+                workflow=request.workflow,
+            )
+
+        @self.app.delete("/api/projects/{project_id}/workflow")
+        def delete_project_workflow(project_id: str):
+            deleted = self.data_repository.delete_workflow(project_id=project_id)
+            return {"deleted": deleted}
+
+        @self.app.get("/api/workflow")
+        def get_active_project_workflow():
+            workflow = self.data_repository.get_workflow(
+                project_id=self.data_repository.get_active_project_id(),
+            )
+            return workflow or {}
+
+        @self.app.post("/api/workflow")
+        def save_active_project_workflow(request: SaveWorkflowRequest):
+            return self.data_repository.save_workflow(
+                project_id=self.data_repository.get_active_project_id(),
+                workflow=request.workflow,
+            )
+
+        @self.app.delete("/api/workflow")
+        def delete_active_project_workflow():
+            deleted = self.data_repository.delete_workflow(
                 project_id=self.data_repository.get_active_project_id(),
             )
             return {"deleted": deleted}

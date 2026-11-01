@@ -123,6 +123,8 @@ class Server:
                 "about",
                 "company-research",
                 "api-keys",
+                "tasks",
+                "workflow",
             ]
             paths = request.url.path.split("/")
             if (

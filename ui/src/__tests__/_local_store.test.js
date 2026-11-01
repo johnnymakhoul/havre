@@ -27,6 +27,10 @@ import {
   getProjectFollowUps,
   saveProjectFollowUps,
   deleteProjectFollowUps,
+  getProjectWorkflow,
+  saveProjectWorkflow,
+  deleteProjectWorkflow,
+  resetProjectWorkflow,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -43,6 +47,9 @@ const localStorageMock = (() => {
     getItem: (key) => store[key] || null,
     setItem: (key, value) => {
       store[key] = value.toString();
+    },
+    removeItem: (key) => {
+      delete store[key];
     },
     clear: () => {
       store = {};
@@ -824,6 +831,31 @@ describe("Local Store", () => {
       expect(followUps["follow-up-a"]).toBe("Hydrated follow-up response");
 
       fetchSpy.mockRestore();
+    });
+
+    it("should save, get, and delete project workflow state", () => {
+      expect(getProjectWorkflow("custom-proj")).toBeNull();
+
+      const workflowData = {
+        status: "in-progress",
+        activeStepIndex: 1,
+        stages: [
+          { key: "research", status: "completed", cards: [{ title: "R1" }] },
+          { key: "specification", status: "in-review", cards: [] },
+        ],
+      };
+
+      const saved = saveProjectWorkflow(workflowData, "custom-proj");
+      expect(saved.projectId).toBe("custom-proj");
+      expect(saved.activeStepIndex).toBe(1);
+      expect(saved.updatedAt).toBeDefined();
+
+      const retrieved = getProjectWorkflow("custom-proj");
+      expect(retrieved.activeStepIndex).toBe(1);
+      expect(retrieved.stages.length).toBe(2);
+
+      resetProjectWorkflow("custom-proj");
+      expect(getProjectWorkflow("custom-proj")).toBeNull();
     });
   });
 });

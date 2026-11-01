@@ -1,5 +1,5 @@
 // © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
-import { Card, ConfigProvider, Tag, Tabs, Tooltip } from "antd";
+import { Card, ConfigProvider, Tag, Tabs, Tooltip, Button } from "antd";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
@@ -224,6 +224,32 @@ export default function ChatDashboard() {
                 Haiven is your intelligent AI assistant, here to assist you to
                 kick-start your software delivery activities
               </div>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "16px 24px",
+                background: "linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)",
+                borderRadius: 8,
+                border: "1px solid #bfdbfe",
+                marginBottom: 20,
+              }}
+            >
+              <div>
+                <h3 style={{ margin: "0 0 4px 0", color: "#1e3a8a", fontWeight: 700 }}>
+                  Project Automation Workflow
+                </h3>
+                <p style={{ margin: 0, color: "#1d4ed8", fontSize: "0.9rem" }}>
+                  Chain project sections end-to-end with autonomous AI generation, Human-in-the-Loop review gates, and executive dossier synthesis.
+                </p>
+              </div>
+              <Link href="/workflow">
+                <Button type="primary" size="large">
+                  Run Project Workflow
+                </Button>
+              </Link>
             </div>
             <Tabs
               defaultActiveKey="codified"

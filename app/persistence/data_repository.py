@@ -222,6 +222,25 @@ class DataRepository(DataRepositoryInterface):
     ) -> bool:
         return self.repository.delete_tasks(project_id)
 
+    def get_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self.repository.get_workflow(project_id)
+
+    def save_workflow(
+        self,
+        project_id: Optional[str],
+        workflow: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.repository.save_workflow(project_id, workflow)
+
+    def delete_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        return self.repository.delete_workflow(project_id)
+
 
 
 __all__ = [

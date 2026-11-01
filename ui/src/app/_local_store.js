@@ -1017,3 +1017,101 @@ export const getSummaryForTheUserContext = (contextTitle) => {
   );
   return context ? context.summary : "";
 };
+
+export const getWorkflowStorageKey = (projectId) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `workflow_${activeId}`
+    : "workflow";
+};
+
+export const getProjectWorkflow = (projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getWorkflowStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : null;
+
+    if (typeof fetch === "function") {
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/workflow`,
+      ).then((serverWorkflow) => {
+        if (
+          serverWorkflow &&
+          typeof serverWorkflow === "object" &&
+          Object.keys(serverWorkflow).length > 0
+        ) {
+          localStorage.setItem(storageKey, JSON.stringify(serverWorkflow));
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("update-workflow", {
+                detail: { workflow: serverWorkflow, projectId: activeId },
+              }),
+            );
+          }
+        }
+      });
+    }
+
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+export const saveProjectWorkflow = (workflow, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getWorkflowStorageKey(activeId);
+    const now = Date.now();
+    const normalized = {
+      ...(workflow || {}),
+      projectId: activeId,
+      updatedAt: now,
+    };
+
+    localStorage.setItem(storageKey, JSON.stringify(normalized));
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/workflow`, {
+      method: "POST",
+      body: JSON.stringify({ workflow: normalized }),
+    });
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-workflow", {
+          detail: { workflow: normalized, projectId: activeId },
+        }),
+      );
+    }
+    return normalized;
+  } catch (e) {
+    console.error("Failed to save project workflow", e);
+    return workflow;
+  }
+};
+
+export const deleteProjectWorkflow = (projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getWorkflowStorageKey(activeId);
+    localStorage.removeItem(storageKey);
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/workflow`, {
+      method: "DELETE",
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-workflow", {
+          detail: { workflow: null, projectId: activeId },
+        }),
+      );
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const resetProjectWorkflow = (projectId = null) => {
+  return deleteProjectWorkflow(projectId);
+};
+

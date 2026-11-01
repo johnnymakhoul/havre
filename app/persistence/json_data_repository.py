@@ -54,6 +54,8 @@ class JsonDataRepository(DataRepositoryInterface):
                             "cards": loaded.get("cards", {}) or {},
                             "chats": loaded.get("chats", {}) or {},
                             "followUps": loaded.get("followUps", {}) or {},
+                            "tasks": loaded.get("tasks", {}) or {},
+                            "workflows": loaded.get("workflows", {}) or {},
                         }
                 else:
                     parent_dir = os.path.dirname(self.file_path)
@@ -108,6 +110,10 @@ class JsonDataRepository(DataRepositoryInterface):
                 self._data["chats"] = state["chats"]
             if "followUps" in state and isinstance(state["followUps"], dict):
                 self._data["followUps"] = state["followUps"]
+            if "tasks" in state and isinstance(state["tasks"], dict):
+                self._data["tasks"] = state["tasks"]
+            if "workflows" in state and isinstance(state["workflows"], dict):
+                self._data["workflows"] = state["workflows"]
 
             self._data["projects"] = projects
             self._data["activeProjectId"] = active_id
@@ -207,6 +213,10 @@ class JsonDataRepository(DataRepositoryInterface):
                 self._data["chats"].pop(project_id, None)
             if "followUps" in self._data:
                 self._data["followUps"].pop(project_id, None)
+            if "tasks" in self._data:
+                self._data["tasks"].pop(project_id, None)
+            if "workflows" in self._data:
+                self._data["workflows"].pop(project_id, None)
             if self._data["activeProjectId"] == project_id:
                 self._data["activeProjectId"] = DEFAULT_PROJECT["id"]
             self._save()
@@ -604,6 +614,55 @@ class JsonDataRepository(DataRepositoryInterface):
             if "tasks" not in self._data or target_project not in self._data["tasks"]:
                 return False
             del self._data["tasks"][target_project]
+            self._save()
+            return True
+
+    def get_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            project_workflow = self._data.get("workflows", {}).get(target_project)
+            return (
+                copy.deepcopy(project_workflow)
+                if project_workflow is not None
+                else None
+            )
+
+    def save_workflow(
+        self,
+        project_id: Optional[str],
+        workflow: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if "workflows" not in self._data:
+                self._data["workflows"] = {}
+
+            now_ms = int(time.time() * 1000)
+            workflow_copy = (
+                copy.deepcopy(workflow) if isinstance(workflow, dict) else {}
+            )
+            workflow_copy["projectId"] = target_project
+            workflow_copy["updatedAt"] = now_ms
+
+            self._data["workflows"][target_project] = workflow_copy
+            self._save()
+            return copy.deepcopy(workflow_copy)
+
+    def delete_workflow(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if (
+                "workflows" not in self._data
+                or target_project not in self._data["workflows"]
+            ):
+                return False
+            del self._data["workflows"][target_project]
             self._save()
             return True
 
