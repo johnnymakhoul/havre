@@ -139,6 +139,13 @@ class SqliteDataRepository(DataRepositoryInterface):
                             updated_at INTEGER NOT NULL,
                             PRIMARY KEY (project_id, prompt_id)
                         );
+
+                        CREATE TABLE IF NOT EXISTS project_tasks (
+                            project_id TEXT NOT NULL,
+                            tasks_json TEXT NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            PRIMARY KEY (project_id)
+                        );
                         """
                     )
 
@@ -1108,6 +1115,78 @@ class SqliteDataRepository(DataRepositoryInterface):
                             "DELETE FROM prompt_follow_ups WHERE project_id = ?",
                             (target_project,),
                         )
+                    return cursor.rowcount > 0
+            finally:
+                self._close(conn)
+
+    def get_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT tasks_json FROM project_tasks WHERE project_id = ?",
+                    (target_project,),
+                ).fetchone()
+                if row and row["tasks_json"]:
+                    return json.loads(row["tasks_json"])
+                return []
+            finally:
+                self._close(conn)
+
+    def save_tasks(
+        self,
+        project_id: Optional[str],
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            now_ms = int(time.time() * 1000)
+
+            processed_tasks = []
+            for i, task in enumerate(tasks):
+                task_copy = copy.deepcopy(task)
+                if "id" not in task_copy or not task_copy["id"]:
+                    task_copy["id"] = f"task-{now_ms}-{i}"
+                if "updatedAt" not in task_copy:
+                    task_copy["updatedAt"] = now_ms
+                processed_tasks.append(task_copy)
+
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO project_tasks
+                        (project_id, tasks_json, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            target_project,
+                            json.dumps(processed_tasks),
+                            now_ms,
+                        ),
+                    )
+                return copy.deepcopy(processed_tasks)
+            finally:
+                self._close(conn)
+
+    def delete_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            conn = self._connect()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "DELETE FROM project_tasks WHERE project_id = ?",
+                        (target_project,),
+                    )
                     return cursor.rowcount > 0
             finally:
                 self._close(conn)

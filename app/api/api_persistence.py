@@ -95,6 +95,11 @@ class SaveFollowUpsRequest(BaseModel):
         return self.promptId or self.prompt_id or "default"
 
 
+class SaveTasksRequest(BaseModel):
+    tasks: List[Dict[str, Any]] = []
+
+
+
 class ApiPersistence:
     def __init__(self, app: FastAPI, data_repository: DataRepository):
         self.app = app
@@ -401,5 +406,41 @@ class ApiPersistence:
             deleted = self.data_repository.delete_follow_ups(
                 project_id=self.data_repository.get_active_project_id(),
                 prompt_id=resolved_prompt,
+            )
+            return {"deleted": deleted}
+
+        @self.app.get("/api/projects/{project_id}/tasks")
+        def get_project_tasks(project_id: str):
+            return self.data_repository.get_tasks(project_id=project_id)
+
+        @self.app.post("/api/projects/{project_id}/tasks")
+        def save_project_tasks(project_id: str, request: SaveTasksRequest):
+            return self.data_repository.save_tasks(
+                project_id=project_id,
+                tasks=request.tasks,
+            )
+
+        @self.app.delete("/api/projects/{project_id}/tasks")
+        def delete_project_tasks(project_id: str):
+            deleted = self.data_repository.delete_tasks(project_id=project_id)
+            return {"deleted": deleted}
+
+        @self.app.get("/api/tasks")
+        def get_active_project_tasks():
+            return self.data_repository.get_tasks(
+                project_id=self.data_repository.get_active_project_id(),
+            )
+
+        @self.app.post("/api/tasks")
+        def save_active_project_tasks(request: SaveTasksRequest):
+            return self.data_repository.save_tasks(
+                project_id=self.data_repository.get_active_project_id(),
+                tasks=request.tasks,
+            )
+
+        @self.app.delete("/api/tasks")
+        def delete_active_project_tasks():
+            deleted = self.data_repository.delete_tasks(
+                project_id=self.data_repository.get_active_project_id(),
             )
             return {"deleted": deleted}

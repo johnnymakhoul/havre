@@ -14,6 +14,7 @@ import {
   RiDashboardHorizontalLine,
   RiGlobalLine,
   RiBriefcase2Line,
+  RiKanbanView2,
 } from "react-icons/ri";
 
 // Keeping the implementation of menu items for the "static" features in one place
@@ -199,7 +200,16 @@ export const initialiseMenuCategoriesForSidebar = (
         key: "project-management",
         label: "Project Management",
         icon: <RiShieldCheckLine style={{ fontSize: "large" }} />,
-        children: [],
+        children: [
+          {
+            key: "project-management-tasks",
+            label: (
+              <Link href="/tasks" className="submenu-entry">
+                Tasks
+              </Link>
+            ),
+          },
+        ],
       };
     }
     if (isSectionEnabled("coding")) {
@@ -242,6 +252,11 @@ export const initialiseMenuCategoriesForSidebar = (
       label: <Link href="/">Dashboard</Link>,
       icon: <RiDashboardHorizontalLine style={{ fontSize: "large" }} />,
     },
+    tasks: {
+      key: "tasks",
+      label: <Link href="/tasks">Tasks</Link>,
+      icon: <RiKanbanView2 style={{ fontSize: "large" }} />,
+    },
     knowledgeChat: {
       key: "knowledgeChat",
       label: <Link href="/knowledge-chat">Chat with Haiven</Link>,
@@ -276,6 +291,15 @@ export const staticFeaturesForDashboard = () => {
       categories: ["ideate"],
       type: "static",
       link: "/scenarios",
+    },
+    {
+      identifier: "boba-tasks",
+      title: "Tasks",
+      help_prompt_description:
+        "Kanban board to track project deliverables, Work Breakdown Structure (WBS) tasks, and Human-in-the-Loop review states.",
+      categories: ["project-management"],
+      type: "static",
+      link: "/tasks",
     },
   ];
 };

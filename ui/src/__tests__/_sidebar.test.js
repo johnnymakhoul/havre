@@ -273,6 +273,7 @@ describe("Sidebar Component", () => {
       // Verify that items are sorted alphabetically regardless of icon presence
       expect(itemTexts).toEqual([
         "Dashboard",
+        "Tasks",
         "Chat with Haiven",
         "Company Research Analysis",
         "Regular Prompt",
@@ -1046,6 +1047,31 @@ describe("Sidebar Component", () => {
 
       expect(screen.getByText("Mobile App Project")).toBeInTheDocument();
       expect(screen.getByTestId("delete-project-button")).toBeInTheDocument();
+    });
+
+    it("should render Tasks at top level and under Project Management", async () => {
+      useRouter.mockReturnValue({
+        pathname: "/",
+      });
+
+      await act(async () => {
+        render(<Sidebar prompts={mockPrompts} featureToggleConfig={{}} />);
+      });
+
+      // Top level link
+      const topLevelTaskLinks = screen.getAllByRole("link", { name: "Tasks" });
+      expect(topLevelTaskLinks.length).toBeGreaterThanOrEqual(1);
+      expect(topLevelTaskLinks[0]).toHaveAttribute("href", "/tasks");
+
+      // Expand Project Management
+      const pmCategory = screen.getByText("Project Management");
+      await act(async () => {
+        fireEvent.click(pmCategory);
+      });
+
+      const allTaskLinks = screen.getAllByRole("link", { name: "Tasks" });
+      expect(allTaskLinks.length).toBe(2);
+      expect(allTaskLinks[1]).toHaveAttribute("href", "/tasks");
     });
   });
 });
