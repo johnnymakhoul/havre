@@ -18,6 +18,7 @@ const Sidebar = ({ prompts, featureToggleConfig }) => {
     "/scenarios": "scenarios",
     "/creative-matrix": "creative-matrix",
     "/knowledge-chat": "knowledgeChat",
+    "/tasks": "tasks",
     "/": "dashboard",
   };
   const router = useRouter();

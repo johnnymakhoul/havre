@@ -348,6 +348,49 @@ def test_follow_ups_repository_methods_and_endpoints():
         assert res.status_code == 200
         assert "followUps" in res.json()
 
+        # 6. Save tasks via active project endpoint
+        res = client.post(
+            "/api/tasks",
+            json={
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "title": "Task 1",
+                        "status": "backlog",
+                        "hitl": {"required": False},
+                    },
+                    {
+                        "id": "task-2",
+                        "title": "Task 2",
+                        "status": "in_progress",
+                        "hitl": {"required": True, "reason": "Sign-off needed"},
+                    },
+                ]
+            },
+        )
+        assert res.status_code == 200
+        saved_tasks = res.json()
+        assert len(saved_tasks) == 2
+        assert saved_tasks[0]["id"] == "task-1"
+        assert saved_tasks[1]["status"] == "in_progress"
+
+        # 7. Retrieve tasks
+        res = client.get("/api/tasks")
+        assert res.status_code == 200
+        assert len(res.json()) == 2
+
+        # 8. Verify isolation across projects
+        res = client.get("/api/projects/project-2/tasks")
+        assert res.status_code == 200
+        assert res.json() == []
+
+        # 9. Delete tasks
+        res = client.delete("/api/projects/default/tasks")
+        assert res.status_code == 200
+        assert res.json()["deleted"] is True
+        assert repo.get_tasks("default") == []
+
+
 
 def test_sqlite_auto_migrates_legacy_json_file():
     with tempfile.TemporaryDirectory() as tmpdir:

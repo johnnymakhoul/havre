@@ -562,3 +562,49 @@ class JsonDataRepository(DataRepositoryInterface):
             self._save()
             return True
 
+    def get_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            project_tasks = self._data.get("tasks", {}).get(target_project, [])
+            return copy.deepcopy(project_tasks)
+
+    def save_tasks(
+        self,
+        project_id: Optional[str],
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if "tasks" not in self._data:
+                self._data["tasks"] = {}
+
+            now_ms = int(time.time() * 1000)
+            processed_tasks = []
+            for i, task in enumerate(tasks):
+                task_copy = copy.deepcopy(task)
+                if "id" not in task_copy or not task_copy["id"]:
+                    task_copy["id"] = f"task-{now_ms}-{i}"
+                if "updatedAt" not in task_copy:
+                    task_copy["updatedAt"] = now_ms
+                processed_tasks.append(task_copy)
+
+            self._data["tasks"][target_project] = processed_tasks
+            self._save()
+            return copy.deepcopy(processed_tasks)
+
+    def delete_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            target_project = project_id or self.get_active_project_id()
+            if "tasks" not in self._data or target_project not in self._data["tasks"]:
+                return False
+            del self._data["tasks"][target_project]
+            self._save()
+            return True
+
+

@@ -226,3 +226,26 @@ class DataRepositoryInterface(ABC):
     ) -> bool:
         pass
 
+    @abstractmethod
+    def get_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def save_tasks(
+        self,
+        project_id: Optional[str],
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def delete_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        pass
+
+

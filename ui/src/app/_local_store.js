@@ -159,12 +159,14 @@ export const deleteProject = (projectId) => {
     localStorage.removeItem(`cards_${projectId}`);
     localStorage.removeItem(`chats_${projectId}`);
     localStorage.removeItem(`follow_ups_${projectId}`);
+    localStorage.removeItem(`tasks_${projectId}`);
   } else {
     localStorage.setItem(`pinboard_${projectId}`, JSON.stringify({}));
     localStorage.setItem(`context_${projectId}`, JSON.stringify([]));
     localStorage.setItem(`cards_${projectId}`, JSON.stringify({}));
     localStorage.setItem(`chats_${projectId}`, JSON.stringify({}));
     localStorage.setItem(`follow_ups_${projectId}`, JSON.stringify({}));
+    localStorage.setItem(`tasks_${projectId}`, JSON.stringify([]));
   }
   syncWithBackend(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
@@ -507,6 +509,230 @@ export const deleteProjectFollowUps = (promptId = null, projectId = null) => {
   }
 };
 
+export const getTasksStorageKey = (projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  return activeId && activeId !== DEFAULT_PROJECT.id
+    ? `tasks_${activeId}`
+    : "tasks";
+};
+
+export const getProjectTasks = (projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getTasksStorageKey(activeId);
+    const raw = localStorage.getItem(storageKey);
+    const rawTasks = raw ? JSON.parse(raw) : [];
+    const tasks = Array.isArray(rawTasks) ? rawTasks : [];
+
+    // Ensure every task has a robust, guaranteed unique id
+    let needsResave = false;
+    const seenIds = new Set();
+    const normalizedTasks = tasks.map((t, idx) => {
+      let id = t?.id;
+      if (!id || seenIds.has(id)) {
+        id = t?.sourceRef
+          ? `task-${t.sourceRef}-${idx}`
+          : `task-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`;
+        needsResave = true;
+      }
+      seenIds.add(id);
+      return {
+        ...t,
+        id,
+        status: t?.status || "backlog",
+        hitl: t?.hitl || { required: false, reason: "" },
+      };
+    });
+
+    if (needsResave && normalizedTasks.length > 0) {
+      localStorage.setItem(storageKey, JSON.stringify(normalizedTasks));
+    }
+
+    if (typeof fetch === "function") {
+      syncWithBackend(
+        `/api/projects/${encodeURIComponent(activeId)}/tasks`,
+      ).then((serverTasks) => {
+        if (Array.isArray(serverTasks) && serverTasks.length > 0) {
+          localStorage.setItem(storageKey, JSON.stringify(serverTasks));
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("update-tasks", {
+                detail: { tasks: serverTasks, projectId: activeId },
+              }),
+            );
+          }
+        }
+      });
+    }
+
+    return normalizedTasks;
+  } catch (e) {
+    return [];
+  }
+};
+
+export const saveProjectTasks = (tasks, projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getTasksStorageKey(activeId);
+    const now = Date.now();
+    const normalizedTasks = Array.isArray(tasks)
+      ? tasks.map((task, idx) => ({
+          ...task,
+          id: task?.id || `task-${now}-${idx}`,
+          status: task?.status || "backlog",
+          hitl: task?.hitl || { required: false, reason: "" },
+          updatedAt: task?.updatedAt || now,
+        }))
+      : [];
+
+    localStorage.setItem(storageKey, JSON.stringify(normalizedTasks));
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/tasks`, {
+      method: "POST",
+      body: JSON.stringify({ tasks: normalizedTasks }),
+    });
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-tasks", {
+          detail: { tasks: normalizedTasks, projectId: activeId },
+        }),
+      );
+    }
+    return normalizedTasks;
+  } catch (e) {
+    console.error("Failed to save project tasks", e);
+    return tasks;
+  }
+};
+
+export const deleteProjectTasks = (projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const storageKey = getTasksStorageKey(activeId);
+    localStorage.removeItem(storageKey);
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/tasks`, {
+      method: "DELETE",
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("update-tasks", {
+          detail: { tasks: [], projectId: activeId },
+        }),
+      );
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const syncWbsToTasks = (projectId = null) => {
+  try {
+    const activeId = projectId || getActiveProjectId();
+    const wbsPromptId = "work-breakdown-structure-cards-7f1a5e3c";
+    const existingCards = getProjectCards(wbsPromptId, activeId);
+
+    if (!Array.isArray(existingCards) || existingCards.length === 0) {
+      return getProjectTasks(activeId);
+    }
+
+    const currentTasks = getProjectTasks(activeId);
+    const existingIds = new Set(
+      currentTasks.map((t) => t.sourceRef || t.id || t.title),
+    );
+
+    let hasNew = false;
+    const newTasks = [];
+
+    existingCards.forEach((card, idx) => {
+      const cardRef = card.id || card.title;
+      if (!existingIds.has(cardRef) && !existingIds.has(card.title)) {
+        hasNew = true;
+        const now = Date.now();
+        const uniqueId = `task-wbs-${card.id || `item-${idx}`}-${now}-${Math.random().toString(36).substr(2, 5)}`;
+        newTasks.push({
+          id: uniqueId,
+          source: "wbs_sync",
+          sourceRef: cardRef,
+          title: card.title || "Untitled WBS Work Package",
+          wbsLevel: card.wbs_level || "Level 3 - Work Package",
+          pbsDeliverableRef: card.pbs_deliverable_ref || "",
+          pdpStageRef: card.pdp_stage_ref || "",
+          summary: card.summary || "",
+          selfReview: card["self-review"] || "",
+          status: "backlog",
+          hitl: {
+            required: false,
+            reason: "",
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+
+    if (hasNew && newTasks.length > 0) {
+      const merged = [...currentTasks, ...newTasks];
+      return saveProjectTasks(merged, activeId);
+    }
+
+    return currentTasks;
+  } catch (e) {
+    console.error("Failed to sync WBS cards to tasks", e);
+    return getProjectTasks(projectId);
+  }
+};
+
+export const createTask = (taskData, projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  const currentTasks = getProjectTasks(activeId);
+  const now = Date.now();
+  const newTask = {
+    id: `task-manual-${now}-${Math.random().toString(36).substr(2, 6)}`,
+    source: "manual",
+    title: taskData.title || "New Task",
+    status: taskData.status || "backlog",
+    summary: taskData.summary || "",
+    wbsLevel: taskData.wbsLevel || "Work Item",
+    pbsDeliverableRef: taskData.pbsDeliverableRef || "",
+    pdpStageRef: taskData.pdpStageRef || "",
+    hitl: taskData.hitl || { required: false, reason: "" },
+    createdAt: now,
+    updatedAt: now,
+  };
+  const updated = [newTask, ...currentTasks];
+  saveProjectTasks(updated, activeId);
+  return newTask;
+};
+
+export const updateTask = (taskId, updates, projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  const currentTasks = getProjectTasks(activeId);
+  const now = Date.now();
+  const updated = currentTasks.map((t) => {
+    if (t.id === taskId) {
+      return {
+        ...t,
+        ...updates,
+        updatedAt: now,
+      };
+    }
+    return t;
+  });
+  saveProjectTasks(updated, activeId);
+  return updated.find((t) => t.id === taskId);
+};
+
+export const deleteTask = (taskId, projectId = null) => {
+  const activeId = projectId || getActiveProjectId();
+  const currentTasks = getProjectTasks(activeId);
+  const filtered = currentTasks.filter((t) => t.id !== taskId);
+  saveProjectTasks(filtered, activeId);
+  return true;
+};
+
+
 export const hydrateFromBackend = async () => {
   const serverState = await syncWithBackend("/api/persistence/state", {
     method: "GET",
@@ -647,6 +873,9 @@ export const initializeLocalStorage = () => {
   }
   if (!localStorage.getItem("activeProjectId")) {
     localStorage.setItem("activeProjectId", DEFAULT_PROJECT.id);
+  }
+  if (!localStorage.getItem("tasks")) {
+    localStorage.setItem("tasks", JSON.stringify([]));
   }
   hydrateFromBackend();
 };

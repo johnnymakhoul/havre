@@ -203,6 +203,26 @@ class DataRepository(DataRepositoryInterface):
     ) -> bool:
         return self.repository.delete_follow_ups(project_id, prompt_id)
 
+    def get_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return self.repository.get_tasks(project_id)
+
+    def save_tasks(
+        self,
+        project_id: Optional[str],
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return self.repository.save_tasks(project_id, tasks)
+
+    def delete_tasks(
+        self,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        return self.repository.delete_tasks(project_id)
+
+
 
 __all__ = [
     "DEFAULT_PROJECT",
