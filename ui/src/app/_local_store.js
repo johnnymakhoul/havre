@@ -118,6 +118,7 @@ export const addProject = (
   name,
   description = "",
   sections = DEFAULT_PROJECT_SECTIONS,
+  github = null,
 ) => {
   const trimmedName = (name || "").trim();
   if (!trimmedName) {
@@ -135,6 +136,7 @@ export const addProject = (
         : DEFAULT_PROJECT_SECTIONS,
     timestamp,
     isDefault: false,
+    ...(github ? { github } : {}),
   };
   const updatedProjects = [...projects, newProject];
   localStorage.setItem("projects", JSON.stringify(updatedProjects));
@@ -144,6 +146,29 @@ export const addProject = (
   });
   setActiveProject(newProject.id);
   return newProject;
+};
+
+export const updateProject = (projectId, updates) => {
+  if (!projectId || !updates) return null;
+  const projects = getProjects();
+  let updatedProject = null;
+  const updatedProjects = projects.map((p) => {
+    if (p.id === projectId) {
+      updatedProject = { ...p, ...updates };
+      return updatedProject;
+    }
+    return p;
+  });
+  if (!updatedProject) return null;
+  localStorage.setItem("projects", JSON.stringify(updatedProjects));
+  syncWithBackend(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("update-project"));
+  }
+  return updatedProject;
 };
 
 export const deleteProject = (projectId) => {

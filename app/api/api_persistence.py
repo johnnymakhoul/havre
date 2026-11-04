@@ -12,12 +12,14 @@ class CreateProjectRequest(BaseModel):
     description: Optional[str] = ""
     sections: Optional[List[str]] = None
     timestamp: Optional[int] = None
+    github: Optional[Dict[str, Any]] = None
 
 
 class UpdateProjectRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     sections: Optional[List[str]] = None
+    github: Optional[Dict[str, Any]] = None
 
 
 class ActiveProjectRequest(BaseModel):

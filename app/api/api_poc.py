@@ -3,7 +3,7 @@ import base64
 import sys
 import threading
 import traceback
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -24,6 +24,8 @@ class PocExecutionRequest(BaseModel):
     timeout_seconds: Optional[int] = 3600
     agent_timeout_seconds: Optional[int] = 900
     keep_alive_for_preview: Optional[bool] = True
+    project_id: Optional[str] = None
+    github_config: Optional[Dict[str, Any]] = None
 
 
 class PocInstructionRequest(BaseModel):
@@ -36,9 +38,11 @@ class ApiPoc:
         app: FastAPI,
         config_service: Optional[ConfigService] = None,
         poc_service: Optional[PocSandboxService] = None,
+        data_repository: Optional[Any] = None,
     ):
         self.config_service = config_service
         self.poc_service = poc_service or PocSandboxService(config_service=config_service)
+        self.data_repository = data_repository
 
         @app.get("/api/debug/threads")
         async def get_thread_dump(request: Request):
@@ -75,6 +79,20 @@ class ApiPoc:
         @app.post("/api/poc/generate")
         async def execute_poc_spike(request: Request, body: PocExecutionRequest):
             """Execute an ADR PoC spike with Pi & Gemini in an E2B Sandbox with live deployment."""
+            gh_config = body.github_config
+            if not gh_config and self.data_repository:
+                try:
+                    active_id = self.data_repository.get_active_project_id()
+                    target_id = body.project_id or active_id
+                    for proj in self.data_repository.get_projects():
+                        if proj.get("id") == target_id:
+                            gh = proj.get("github")
+                            if gh and gh.get("repoUrl"):
+                                gh_config = gh
+                            break
+                except Exception as ex:
+                    logger.warning(f"Could not auto-resolve project github config: {ex}")
+
             if request.query_params.get("stream") == "true":
                 import queue
                 import asyncio
@@ -102,6 +120,7 @@ class ApiPoc:
                             agent_timeout_seconds=body.agent_timeout_seconds or 900,
                             keep_alive_for_preview=True if body.keep_alive_for_preview is None else body.keep_alive_for_preview,
                             on_log=on_log,
+                            github_config=gh_config,
                         )
                         log_queue.put({"type": "result", "data": res})
                     except Exception as exc:
@@ -148,6 +167,7 @@ class ApiPoc:
                     timeout_seconds=body.timeout_seconds or 3600,
                     agent_timeout_seconds=body.agent_timeout_seconds or 900,
                     keep_alive_for_preview=True if body.keep_alive_for_preview is None else body.keep_alive_for_preview,
+                    github_config=gh_config,
                 )
                 return JSONResponse(result)
             except Exception as e:
