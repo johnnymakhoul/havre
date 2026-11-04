@@ -22,17 +22,19 @@ Structure the specification using clean Markdown with tables and the following s
 - Key assumptions regarding team velocity, day rates, and technology stack stability.
 
 ### 2. Master WBS Dictionary & Work Package Catalog
-Provide an exhaustive Markdown table detailing all work packages:
-| WBS Code | Work Package Title | PBS Deliverable Ref | PDP Stage Ref | Predecessors / Dependencies | Parallel Wave | PERT Effort (O / M / P $\to$ E) | Total Cost (Labor + Non-Labor) | Assigned Roles & FTEs | Critical Path |
+Provide an exhaustive Markdown table detailing all atomic work items (each $\le 8$ person-hours) and their roll-up into parent deliverables:
+| WBS Code | Task / Work Item Title (Max 8h) | PBS Deliverable Ref | PDP Stage Ref | Predecessors / Dependencies | Parallel Wave | PERT Effort in Hours (O / M / P $\to$ E) | Total Cost (Labor + Non-Labor) | Assigned Role | Critical Path |
 |---|---|---|---|---|---|---|---|---|---|
 
+Include roll-up subtotals of person-hours and person-days per parent PBS deliverable and PDP stage.
+
 ### 3. Integrated Schedule & Three-Point PERT Analysis
-- Summary of Optimistic, Most Likely, and Pessimistic timelines across all delivery phases.
+- Summary of Optimistic, Most Likely, and Pessimistic timelines across all delivery phases (hours rolled up to days and sprints).
 - **Critical Path Identification**: The sequence of dependent work packages determining the minimum project duration (zero float).
 - Float and buffer recommendations: Schedule contingency reserve (e.g., +15-20%) and path divergence points.
 - **Autonomous Agent Parallelism & Execution Waves**:
-  - Breakdown of execution waves (Wave 1, Wave 2, Wave 3, etc.).
-  - Isolation boundaries confirming why work packages in the same wave can be worked on concurrently by independent agents without merge conflicts or architectural coupling.
+  - Breakdown of execution waves (Wave 1, Wave 2, Wave 3, etc.) showing which $\le 8$-hour tasks can run concurrently.
+  - Isolation boundaries confirming why work items in the same wave can be worked on concurrently by independent agents without merge conflicts or architectural coupling (single PR boundaries).
 - **Task Dependency & Critical Path Flowchart (Mermaid DAG)**:
   - Provide a Mermaid flowchart diagram (`flowchart TD` or `flowchart LR`) illustrating the full task dependency graph, grouping tasks into parallel wave subgraphs, and styling critical path nodes with distinct visual highlights (e.g., `style WBS_X fill:#fee2e2,stroke:#ef4444,stroke-width:2px`).
 

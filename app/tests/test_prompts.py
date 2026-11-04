@@ -1714,6 +1714,9 @@ def test_work_breakdown_structure_prompts_and_flows():
         assert "is_critical_path" in rendered_cards
         assert "parallel_group" in rendered_cards
         assert "wbs_level" in rendered_cards
+        assert "Level 4 - Task / Work Item (Max 8h)" in rendered_cards
+        assert "person-hours" in rendered_cards
+        assert "Single PR" in rendered_cards
         assert "pbs_deliverable_ref" in rendered_cards
         assert "pdp_stage_ref" in rendered_cards
         assert "**Scope of Work & Deliverable Outcome**" in rendered_cards
@@ -1741,6 +1744,7 @@ def test_work_breakdown_structure_prompts_and_flows():
             {"context": "WBS cards context"},
         )
         assert "Predecessors / Dependencies" in rendered_spec
+        assert "Task / Work Item Title (Max 8h)" in rendered_spec
         assert "Autonomous Agent Parallelism & Execution Waves" in rendered_spec
         assert "Mermaid DAG" in rendered_spec
 
