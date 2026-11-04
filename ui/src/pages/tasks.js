@@ -31,6 +31,9 @@ import {
   RiArrowRightLine,
   RiArrowLeftLine,
   RiShieldCheckLine,
+  RiGitMergeLine,
+  RiFireLine,
+  RiRouteLine,
 } from "react-icons/ri";
 import { toast } from "react-toastify";
 import {
@@ -41,6 +44,7 @@ import {
   createTask,
   updateTask,
   deleteTask,
+  extractWbsCode,
 } from "../app/_local_store";
 import MarkdownRenderer from "../app/_markdown_renderer";
 
@@ -94,6 +98,10 @@ export default function TasksPage() {
   const [dragOverColumn, setDragOverColumn] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterHitlOnly, setFilterHitlOnly] = useState(false);
+  const [filterReadyOnly, setFilterReadyOnly] = useState(false);
+  const [filterCriticalOnly, setFilterCriticalOnly] = useState(false);
+  const [selectedWave, setSelectedWave] = useState("ALL");
+  const [pendingMove, setPendingMove] = useState(null);
 
   const selectedTask = useMemo(() => {
     if (!selectedTaskId) return null;
@@ -105,8 +113,12 @@ export default function TasksPage() {
   const [formStatus, setFormStatus] = useState("backlog");
   const [formSummary, setFormSummary] = useState("");
   const [formWbsLevel, setFormWbsLevel] = useState("Work Package");
+  const [formWbsCode, setFormWbsCode] = useState("");
   const [formPbsRef, setFormPbsRef] = useState("");
   const [formPdpRef, setFormPdpRef] = useState("");
+  const [formDependencies, setFormDependencies] = useState([]);
+  const [formIsCriticalPath, setFormIsCriticalPath] = useState(false);
+  const [formParallelGroup, setFormParallelGroup] = useState("");
   const [formHitlRequired, setFormHitlRequired] = useState(false);
   const [formHitlReason, setFormHitlReason] = useState("");
 
@@ -152,6 +164,82 @@ export default function TasksPage() {
     }
   }, [refreshTasks]);
 
+  // Task dependencies analysis map
+  const taskDependencyMap = useMemo(() => {
+    const map = {};
+    const codeToTask = new Map();
+
+    tasks.forEach((t) => {
+      const code = t.wbsCode || extractWbsCode(t.title);
+      if (code) {
+        codeToTask.set(code.toLowerCase(), t);
+      }
+      if (t.id) {
+        codeToTask.set(String(t.id).toLowerCase(), t);
+      }
+    });
+
+    tasks.forEach((t) => {
+      const deps = Array.isArray(t.dependencies) ? t.dependencies : [];
+      const resolvedPrereqs = [];
+      const unresolvedPrereqs = [];
+
+      deps.forEach((d) => {
+        const trimmed = String(d).trim();
+        if (!trimmed) return;
+        const matched = codeToTask.get(trimmed.toLowerCase());
+        if (matched && matched.id !== t.id) {
+          if (matched.status === "done") {
+            resolvedPrereqs.push({ code: trimmed, task: matched });
+          } else {
+            unresolvedPrereqs.push({ code: trimmed, task: matched });
+          }
+        } else {
+          // Prerequisite code not matched in current tasks (e.g. external or not yet created)
+          unresolvedPrereqs.push({ code: trimmed, task: null });
+        }
+      });
+
+      const currentCode = t.wbsCode || extractWbsCode(t.title);
+      const downstream = tasks.filter((other) => {
+        if (other.id === t.id) return false;
+        const otherDeps = Array.isArray(other.dependencies)
+          ? other.dependencies
+          : [];
+        return otherDeps.some((depStr) => {
+          const depTrimmed = String(depStr).trim().toLowerCase();
+          return (
+            depTrimmed === String(t.id).toLowerCase() ||
+            (currentCode && depTrimmed === currentCode.toLowerCase())
+          );
+        });
+      });
+
+      map[t.id] = {
+        isBlocked: unresolvedPrereqs.length > 0,
+        isReady: unresolvedPrereqs.length === 0,
+        unresolvedPrereqs,
+        resolvedPrereqs,
+        downstream,
+      };
+    });
+
+    return map;
+  }, [tasks]);
+
+  const availableWaves = useMemo(() => {
+    const waves = new Set();
+    tasks.forEach((t) => {
+      if (
+        t.parallelGroup &&
+        typeof t.parallelGroup === "string" &&
+        t.parallelGroup.trim()
+      ) {
+        waves.add(t.parallelGroup.trim());
+      }
+    });
+    return Array.from(waves).sort();
+  }, [tasks]);
 
   const handleManualSync = () => {
     const proj = getActiveProject();
@@ -178,6 +266,27 @@ export default function TasksPage() {
     setDragOverColumn(null);
   };
 
+  const executeMove = (task, targetColumnId) => {
+    let hitlUpdate = task.hitl;
+    if (targetColumnId === "needs_review" && !task.hitl?.required) {
+      hitlUpdate = {
+        required: true,
+        reason:
+          task.hitl?.reason || "Moved to Needs Review column for verification",
+      };
+    }
+
+    updateTask(
+      task.id,
+      { status: targetColumnId, hitl: hitlUpdate },
+      activeProject?.id,
+    );
+    setTasks(getProjectTasks(activeProject?.id));
+    toast.info(
+      `Moved "${task.title.slice(0, 30)}..." to ${COLUMNS.find((c) => c.id === targetColumnId)?.title}`,
+    );
+  };
+
   const handleDrop = (e, targetColumnId) => {
     e.preventDefault();
     setDragOverColumn(null);
@@ -188,41 +297,48 @@ export default function TasksPage() {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status === targetColumnId) return;
 
-    // Moving to needs_review automatically flags HITL if not already flagged
-    let hitlUpdate = task.hitl;
-    if (targetColumnId === "needs_review" && !task.hitl?.required) {
-      hitlUpdate = {
-        required: true,
-        reason: task.hitl?.reason || "Moved to Needs Review column for verification",
-      };
+    // Soft enforcement: if moving to in_progress and task has unresolved prerequisites, confirm first
+    if (
+      targetColumnId === "in_progress" &&
+      taskDependencyMap[task.id]?.isBlocked
+    ) {
+      setPendingMove({
+        task,
+        targetStatus: targetColumnId,
+        unresolvedPrereqs: taskDependencyMap[task.id].unresolvedPrereqs,
+      });
+      return;
     }
 
-    updateTask(taskId, { status: targetColumnId, hitl: hitlUpdate }, activeProject?.id);
-    setTasks(getProjectTasks(activeProject?.id));
-    toast.info(`Moved "${task.title.slice(0, 30)}..." to ${COLUMNS.find((c) => c.id === targetColumnId)?.title}`);
+    executeMove(task, targetColumnId);
   };
 
   const handleMoveStatus = (task, newStatus) => {
-    let hitlUpdate = task.hitl;
-    if (newStatus === "needs_review" && !task.hitl?.required) {
-      hitlUpdate = {
-        required: true,
-        reason: task.hitl?.reason || "Flagged for Human-in-the-Loop review",
-      };
+    // Soft enforcement on status change
+    if (newStatus === "in_progress" && taskDependencyMap[task.id]?.isBlocked) {
+      setPendingMove({
+        task,
+        targetStatus: newStatus,
+        unresolvedPrereqs: taskDependencyMap[task.id].unresolvedPrereqs,
+      });
+      return;
     }
-    updateTask(task.id, { status: newStatus, hitl: hitlUpdate }, activeProject?.id);
-    setTasks(getProjectTasks(activeProject?.id));
+
+    executeMove(task, newStatus);
   };
 
   const handleToggleHitl = (task, required, reason = "") => {
-    const newStatus = required && task.status !== "needs_review" ? "needs_review" : task.status;
+    const newStatus =
+      required && task.status !== "needs_review" ? "needs_review" : task.status;
     const hitl = {
       required,
       reason: reason || (required ? "Requires human-in-the-loop sign-off" : ""),
     };
     updateTask(task.id, { hitl, status: newStatus }, activeProject?.id);
     setTasks(getProjectTasks(activeProject?.id));
-    toast.success(required ? "Flagged for Human Review (HITL)" : "HITL Flag cleared");
+    toast.success(
+      required ? "Flagged for Human Review (HITL)" : "HITL Flag cleared",
+    );
   };
 
   const handleDelete = (taskId) => {
@@ -241,8 +357,12 @@ export default function TasksPage() {
     setFormStatus("backlog");
     setFormSummary("");
     setFormWbsLevel("Work Package");
+    setFormWbsCode("");
     setFormPbsRef("");
     setFormPdpRef("");
+    setFormDependencies([]);
+    setFormIsCriticalPath(false);
+    setFormParallelGroup("");
     setFormHitlRequired(false);
     setFormHitlReason("");
     setIsAddModalOpen(true);
@@ -254,8 +374,14 @@ export default function TasksPage() {
     setFormStatus(task.status || "backlog");
     setFormSummary(task.summary || "");
     setFormWbsLevel(task.wbsLevel || "Work Package");
+    setFormWbsCode(task.wbsCode || extractWbsCode(task.title));
     setFormPbsRef(task.pbsDeliverableRef || "");
     setFormPdpRef(task.pdpStageRef || "");
+    setFormDependencies(
+      Array.isArray(task.dependencies) ? task.dependencies : [],
+    );
+    setFormIsCriticalPath(Boolean(task.isCriticalPath));
+    setFormParallelGroup(task.parallelGroup || "");
     setFormHitlRequired(Boolean(task.hitl?.required));
     setFormHitlReason(task.hitl?.reason || "");
     setIsAddModalOpen(true);
@@ -272,8 +398,12 @@ export default function TasksPage() {
       status: formStatus,
       summary: formSummary,
       wbsLevel: formWbsLevel,
+      wbsCode: formWbsCode.trim(),
       pbsDeliverableRef: formPbsRef,
       pdpStageRef: formPdpRef,
+      dependencies: formDependencies,
+      isCriticalPath: formIsCriticalPath,
+      parallelGroup: formParallelGroup.trim(),
       hitl: {
         required: formHitlRequired,
         reason: formHitlReason,
@@ -296,19 +426,54 @@ export default function TasksPage() {
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
       if (filterHitlOnly && !task.hitl?.required) return false;
+      if (filterReadyOnly && !taskDependencyMap[task.id]?.isReady) return false;
+      if (filterCriticalOnly && !task.isCriticalPath) return false;
+      if (
+        selectedWave !== "ALL" &&
+        (task.parallelGroup || "").trim() !== selectedWave
+      ) {
+        return false;
+      }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesTitle = task.title?.toLowerCase().includes(q);
         const matchesSummary = task.summary?.toLowerCase().includes(q);
         const matchesPbs = task.pbsDeliverableRef?.toLowerCase().includes(q);
-        return matchesTitle || matchesSummary || matchesPbs;
+        const matchesCode = (task.wbsCode || "").toLowerCase().includes(q);
+        const matchesWave = (task.parallelGroup || "")
+          .toLowerCase()
+          .includes(q);
+        return (
+          matchesTitle ||
+          matchesSummary ||
+          matchesPbs ||
+          matchesCode ||
+          matchesWave
+        );
       }
       return true;
     });
-  }, [tasks, searchQuery, filterHitlOnly]);
+  }, [
+    tasks,
+    searchQuery,
+    filterHitlOnly,
+    filterReadyOnly,
+    filterCriticalOnly,
+    selectedWave,
+    taskDependencyMap,
+  ]);
 
   const taskCounts = useMemo(() => {
-    const counts = { total: tasks.length, backlog: 0, in_progress: 0, needs_review: 0, done: 0, hitl: 0 };
+    const counts = {
+      total: tasks.length,
+      backlog: 0,
+      in_progress: 0,
+      needs_review: 0,
+      done: 0,
+      hitl: 0,
+      ready: 0,
+      critical: 0,
+    };
     tasks.forEach((t) => {
       if (counts[t.status] !== undefined) {
         counts[t.status]++;
@@ -316,12 +481,33 @@ export default function TasksPage() {
       if (t.hitl?.required) {
         counts.hitl++;
       }
+      if (taskDependencyMap[t.id]?.isReady) {
+        counts.ready++;
+      }
+      if (t.isCriticalPath) {
+        counts.critical++;
+      }
     });
     return counts;
-  }, [tasks]);
+  }, [tasks, taskDependencyMap]);
+
+  const dependencyOptions = useMemo(() => {
+    return tasks
+      .filter((t) => !editingTask || t.id !== editingTask.id)
+      .map((t) => {
+        const code = t.wbsCode || extractWbsCode(t.title);
+        const val = code || t.id;
+        return {
+          label: code ? `[${code}] ${t.title}` : t.title,
+          value: val,
+        };
+      });
+  }, [tasks, editingTask]);
 
   return (
-    <div style={{ padding: "24px 32px", minHeight: "100%", background: "#f8fafc" }}>
+    <div
+      style={{ padding: "24px 32px", minHeight: "100%", background: "#f8fafc" }}
+    >
       <Head>
         <title>Tasks - Kanban Board | Haiven</title>
       </Head>
@@ -342,32 +528,90 @@ export default function TasksPage() {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <RiKanbanView2 style={{ fontSize: "1.8rem", color: "#003d4f" }} />
-            <h1 style={{ margin: 0, fontSize: "1.6rem", fontWeight: 700, color: "#0f172a" }}>
+            <h1
+              style={{
+                margin: 0,
+                fontSize: "1.6rem",
+                fontWeight: 700,
+                color: "#0f172a",
+              }}
+            >
               Tasks
             </h1>
-            <Tag color="blue" style={{ fontSize: "0.85rem", padding: "2px 8px" }}>
+            <Tag
+              color="blue"
+              style={{ fontSize: "0.85rem", padding: "2px 8px" }}
+            >
               {activeProject?.name || "Default Project"}
             </Tag>
           </div>
-          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "0.95rem" }}>
-            Visualise backlog deliverables, track task execution, and manage Human-in-the-Loop reviews.
+          <p
+            style={{
+              margin: "4px 0 0 0",
+              color: "#64748b",
+              fontSize: "0.95rem",
+            }}
+          >
+            Visualise backlog deliverables, track task execution, and manage
+            Human-in-the-Loop reviews.
           </p>
         </div>
 
         {/* Header Action Controls */}
-        <Space size="middle">
+        <Space size="middle" wrap>
           <Input.Search
-            placeholder="Search tasks..."
+            placeholder="Search tasks, WBS, waves..."
             allowClear
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: 220 }}
+            style={{ width: 190 }}
           />
+          <Button
+            type={filterReadyOnly ? "primary" : "default"}
+            icon={<RiCheckFill />}
+            onClick={() => setFilterReadyOnly(!filterReadyOnly)}
+            style={
+              filterReadyOnly
+                ? { background: "#16a34a", borderColor: "#16a34a" }
+                : {}
+            }
+          >
+            Ready (Parallel){" "}
+            {taskCounts.ready > 0 ? `(${taskCounts.ready})` : ""}
+          </Button>
+          <Button
+            type={filterCriticalOnly ? "primary" : "default"}
+            icon={<RiFireLine />}
+            onClick={() => setFilterCriticalOnly(!filterCriticalOnly)}
+            style={
+              filterCriticalOnly
+                ? { background: "#dc2626", borderColor: "#dc2626" }
+                : {}
+            }
+          >
+            Critical Path{" "}
+            {taskCounts.critical > 0 ? `(${taskCounts.critical})` : ""}
+          </Button>
+          {availableWaves.length > 0 && (
+            <Select
+              value={selectedWave}
+              onChange={setSelectedWave}
+              style={{ width: 160 }}
+              options={[
+                { label: "All Waves", value: "ALL" },
+                ...availableWaves.map((w) => ({ label: `🌊 ${w}`, value: w })),
+              ]}
+            />
+          )}
           <Button
             type={filterHitlOnly ? "primary" : "default"}
             icon={<RiAlertFill />}
             onClick={() => setFilterHitlOnly(!filterHitlOnly)}
-            style={filterHitlOnly ? { background: "#d97706", borderColor: "#d97706" } : {}}
+            style={
+              filterHitlOnly
+                ? { background: "#d97706", borderColor: "#d97706" }
+                : {}
+            }
           >
             HITL Only {taskCounts.hitl > 0 ? `(${taskCounts.hitl})` : ""}
           </Button>
@@ -398,7 +642,9 @@ export default function TasksPage() {
         }}
       >
         {COLUMNS.map((column) => {
-          const columnTasks = filteredTasks.filter((t) => t.status === column.id);
+          const columnTasks = filteredTasks.filter(
+            (t) => t.status === column.id,
+          );
           const isOver = dragOverColumn === column.id;
 
           return (
@@ -432,11 +678,24 @@ export default function TasksPage() {
                 }}
               >
                 <div>
-                  <span style={{ fontWeight: 700, color: column.color, fontSize: "0.95rem" }}>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: column.color,
+                      fontSize: "0.95rem",
+                    }}
+                  >
                     {column.title}
                   </span>
                   <Tooltip title={column.description}>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "6px", cursor: "help" }}>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#64748b",
+                        marginLeft: "6px",
+                        cursor: "help",
+                      }}
+                    >
                       ⓘ
                     </span>
                   </Tooltip>
@@ -478,180 +737,339 @@ export default function TasksPage() {
                     Drop tasks here
                   </div>
                 ) : (
-                  columnTasks.map((task) => (
-                    <Card
-                      key={task.id}
-                      draggable={true}
-                      onDragStart={(e) => handleDragStart(e, task.id)}
-                      onClick={() => {
-                        setSelectedTaskId(task.id);
-                        setIsDetailDrawerOpen(true);
-                      }}
-                      hoverable
-                      styles={{ body: { padding: "12px" } }}
-                      style={{
-                        cursor: "grab",
-                        borderRadius: "6px",
-                        borderLeft: task.hitl?.required
-                          ? "4px solid #d97706"
-                          : `4px solid ${column.color}`,
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-                        background: "#ffffff",
-                        transition: "transform 0.15s ease, box-shadow 0.15s ease",
-                      }}
-                    >
-                      {/* Top Badges */}
-                      <div
+                  columnTasks.map((task) => {
+                    const depInfo = taskDependencyMap[task.id];
+                    return (
+                      <Card
+                        key={task.id}
+                        draggable={true}
+                        onDragStart={(e) => handleDragStart(e, task.id)}
+                        onClick={() => {
+                          setSelectedTaskId(task.id);
+                          setIsDetailDrawerOpen(true);
+                        }}
+                        hoverable
+                        styles={{ body: { padding: "12px" } }}
                         style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "flex-start",
-                          marginBottom: "6px",
+                          cursor: "grab",
+                          borderRadius: "6px",
+                          borderLeft: task.hitl?.required
+                            ? "4px solid #d97706"
+                            : depInfo?.isBlocked && task.status !== "done"
+                              ? "4px solid #f43f5e"
+                              : `4px solid ${column.color}`,
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                          background: "#ffffff",
+                          transition:
+                            "transform 0.15s ease, box-shadow 0.15s ease",
                         }}
                       >
-                        <Space size={4} wrap>
-                          {task.source === "wbs_sync" ? (
-                            <Tag color="cyan" style={{ fontSize: "0.7rem", margin: 0 }}>
-                              WBS
-                            </Tag>
-                          ) : (
-                            <Tag color="default" style={{ fontSize: "0.7rem", margin: 0 }}>
-                              Custom
-                            </Tag>
-                          )}
-                          {task.pbsDeliverableRef && (
-                            <Tag color="purple" style={{ fontSize: "0.7rem", margin: 0 }}>
-                              {task.pbsDeliverableRef.split(":")[0]}
-                            </Tag>
-                          )}
-                        </Space>
-
-                        {/* Card Quick Actions Menu */}
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <Dropdown
-                            menu={{
-                              items: [
-                                {
-                                  key: "backlog",
-                                  label: "Move to Backlog",
-                                  disabled: task.status === "backlog",
-                                  onClick: () => handleMoveStatus(task, "backlog"),
-                                },
-                                {
-                                  key: "in_progress",
-                                  label: "Move to In Progress",
-                                  disabled: task.status === "in_progress",
-                                  onClick: () => handleMoveStatus(task, "in_progress"),
-                                },
-                                {
-                                  key: "needs_review",
-                                  label: "Flag for Review / HITL",
-                                  disabled: task.status === "needs_review",
-                                  onClick: () => handleMoveStatus(task, "needs_review"),
-                                },
-                                {
-                                  key: "done",
-                                  label: "Mark as Done",
-                                  disabled: task.status === "done",
-                                  onClick: () => handleMoveStatus(task, "done"),
-                                },
-                                { type: "divider" },
-                                {
-                                  key: "edit",
-                                  icon: <RiEditLine />,
-                                  label: "Edit Task",
-                                  onClick: () => openEditModal(task),
-                                },
-                                {
-                                  key: "delete",
-                                  icon: <RiDeleteBinLine />,
-                                  label: "Delete",
-                                  danger: true,
-                                  onClick: () => handleDelete(task.id),
-                                },
-                              ],
-                            }}
-                            trigger={["click"]}
-                          >
-                            <Button
-                              type="text"
-                              size="small"
-                              icon={<RiMore2Fill style={{ fontSize: "1rem", color: "#94a3b8" }} />}
-                              style={{ width: "24px", height: "24px", padding: 0 }}
-                            />
-                          </Dropdown>
-                        </div>
-                      </div>
-
-                      {/* Task Title */}
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          fontSize: "0.9rem",
-                          color: "#1e293b",
-                          lineHeight: "1.3",
-                          marginBottom: "8px",
-                        }}
-                      >
-                        {task.title}
-                      </div>
-
-                      {/* HITL Alert Badge if required */}
-                      {task.hitl?.required && (
+                        {/* Top Badges */}
                         <div
                           style={{
-                            background: "#fef3c7",
-                            border: "1px solid #fde68a",
-                            borderRadius: "4px",
-                            padding: "4px 8px",
-                            marginBottom: "8px",
                             display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                            fontSize: "0.75rem",
-                            color: "#92400e",
-                            fontWeight: 500,
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            marginBottom: "6px",
                           }}
                         >
-                          <RiAlertFill style={{ fontSize: "0.85rem", color: "#d97706" }} />
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {task.hitl.reason || "Human Review Required"}
-                          </span>
-                        </div>
-                      )}
+                          <Space size={4} wrap>
+                            {task.source === "wbs_sync" ? (
+                              <Tag
+                                color="cyan"
+                                style={{ fontSize: "0.7rem", margin: 0 }}
+                              >
+                                WBS
+                              </Tag>
+                            ) : (
+                              <Tag
+                                color="default"
+                                style={{ fontSize: "0.7rem", margin: 0 }}
+                              >
+                                Custom
+                              </Tag>
+                            )}
+                            {task.wbsCode && (
+                              <Tag
+                                color="blue"
+                                style={{
+                                  fontSize: "0.7rem",
+                                  margin: 0,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {task.wbsCode}
+                              </Tag>
+                            )}
+                            {task.isCriticalPath && (
+                              <Tag
+                                color="red"
+                                style={{
+                                  fontSize: "0.7rem",
+                                  margin: 0,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                🔥 Critical
+                              </Tag>
+                            )}
+                            {task.parallelGroup && (
+                              <Tag
+                                color="geekblue"
+                                style={{ fontSize: "0.7rem", margin: 0 }}
+                              >
+                                🌊 {task.parallelGroup}
+                              </Tag>
+                            )}
+                            {task.pbsDeliverableRef && (
+                              <Tag
+                                color="purple"
+                                style={{ fontSize: "0.7rem", margin: 0 }}
+                              >
+                                {task.pbsDeliverableRef.split(":")[0]}
+                              </Tag>
+                            )}
+                          </Space>
 
-                      {/* Footer Info */}
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          fontSize: "0.75rem",
-                          color: "#64748b",
-                          borderTop: "1px solid #f1f5f9",
-                          paddingTop: "6px",
-                          marginTop: "4px",
-                        }}
-                      >
-                        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                          <RiTimeLine style={{ fontSize: "0.8rem" }} />
-                          {task.wbsLevel || "Work Package"}
-                        </span>
-                        <Button
-                          type="link"
-                          size="small"
-                          style={{ padding: 0, fontSize: "0.75rem", height: "auto" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedTaskId(task.id);
-                            setIsDetailDrawerOpen(true);
+                          {/* Card Quick Actions Menu */}
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <Dropdown
+                              menu={{
+                                items: [
+                                  {
+                                    key: "backlog",
+                                    label: "Move to Backlog",
+                                    disabled: task.status === "backlog",
+                                    onClick: () =>
+                                      handleMoveStatus(task, "backlog"),
+                                  },
+                                  {
+                                    key: "in_progress",
+                                    label: "Move to In Progress",
+                                    disabled: task.status === "in_progress",
+                                    onClick: () =>
+                                      handleMoveStatus(task, "in_progress"),
+                                  },
+                                  {
+                                    key: "needs_review",
+                                    label: "Flag for Review / HITL",
+                                    disabled: task.status === "needs_review",
+                                    onClick: () =>
+                                      handleMoveStatus(task, "needs_review"),
+                                  },
+                                  {
+                                    key: "done",
+                                    label: "Mark as Done",
+                                    disabled: task.status === "done",
+                                    onClick: () =>
+                                      handleMoveStatus(task, "done"),
+                                  },
+                                  { type: "divider" },
+                                  {
+                                    key: "edit",
+                                    icon: <RiEditLine />,
+                                    label: "Edit Task",
+                                    onClick: () => openEditModal(task),
+                                  },
+                                  {
+                                    key: "delete",
+                                    icon: <RiDeleteBinLine />,
+                                    label: "Delete",
+                                    danger: true,
+                                    onClick: () => handleDelete(task.id),
+                                  },
+                                ],
+                              }}
+                              trigger={["click"]}
+                            >
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={
+                                  <RiMore2Fill
+                                    style={{
+                                      fontSize: "1rem",
+                                      color: "#94a3b8",
+                                    }}
+                                  />
+                                }
+                                style={{
+                                  width: "24px",
+                                  height: "24px",
+                                  padding: 0,
+                                }}
+                              />
+                            </Dropdown>
+                          </div>
+                        </div>
+
+                        {/* Task Title */}
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: "0.9rem",
+                            color: "#1e293b",
+                            lineHeight: "1.3",
+                            marginBottom: "8px",
                           }}
                         >
-                          View Details
-                        </Button>
-                      </div>
-                    </Card>
-                  ))
+                          {task.title}
+                        </div>
+
+                        {/* HITL Alert Badge if required */}
+                        {task.hitl?.required && (
+                          <div
+                            style={{
+                              background: "#fef3c7",
+                              border: "1px solid #fde68a",
+                              borderRadius: "4px",
+                              padding: "4px 8px",
+                              marginBottom: "8px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              fontSize: "0.75rem",
+                              color: "#92400e",
+                              fontWeight: 500,
+                            }}
+                          >
+                            <RiAlertFill
+                              style={{ fontSize: "0.85rem", color: "#d97706" }}
+                            />
+                            <span
+                              style={{
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {task.hitl.reason || "Human Review Required"}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Dependency & Readiness Status Indicator */}
+                        {task.status !== "done" &&
+                          (depInfo?.isBlocked ? (
+                            <div
+                              style={{
+                                background: "#fff1f2",
+                                border: "1px solid #fecdd3",
+                                borderRadius: "4px",
+                                padding: "3px 6px",
+                                marginBottom: "8px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "5px",
+                                fontSize: "0.75rem",
+                                color: "#be123c",
+                                fontWeight: 500,
+                              }}
+                            >
+                              <RiAlertFill
+                                style={{
+                                  fontSize: "0.85rem",
+                                  color: "#e11d48",
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <span
+                                style={{
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                Blocked by:{" "}
+                                {depInfo.unresolvedPrereqs
+                                  .map((p) => `WBS ${p.code}`)
+                                  .join(", ")}
+                              </span>
+                            </div>
+                          ) : task.status === "backlog" && depInfo?.isReady ? (
+                            <div
+                              style={{
+                                background: "#f0fdf4",
+                                border: "1px solid #bbf7d0",
+                                borderRadius: "4px",
+                                padding: "3px 6px",
+                                marginBottom: "8px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "5px",
+                                fontSize: "0.75rem",
+                                color: "#15803d",
+                                fontWeight: 500,
+                              }}
+                            >
+                              <RiCheckFill
+                                style={{
+                                  fontSize: "0.85rem",
+                                  color: "#16a34a",
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <span>Ready (Parallelizable)</span>
+                            </div>
+                          ) : null)}
+
+                        {/* Footer Info */}
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            fontSize: "0.75rem",
+                            color: "#64748b",
+                            borderTop: "1px solid #f1f5f9",
+                            paddingTop: "6px",
+                            marginTop: "4px",
+                          }}
+                        >
+                          <Space size={6}>
+                            <span
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "4px",
+                              }}
+                            >
+                              <RiTimeLine style={{ fontSize: "0.8rem" }} />
+                              {task.wbsLevel || "Work Package"}
+                            </span>
+                            {depInfo?.downstream?.length > 0 && (
+                              <Tag
+                                color="purple"
+                                style={{
+                                  fontSize: "0.65rem",
+                                  padding: "0 4px",
+                                  margin: 0,
+                                }}
+                              >
+                                Blocks {depInfo.downstream.length}
+                              </Tag>
+                            )}
+                          </Space>
+                          <Button
+                            type="link"
+                            size="small"
+                            style={{
+                              padding: 0,
+                              fontSize: "0.75rem",
+                              height: "auto",
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTaskId(task.id);
+                              setIsDetailDrawerOpen(true);
+                            }}
+                          >
+                            View Details
+                          </Button>
+                        </div>
+                      </Card>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -662,7 +1080,14 @@ export default function TasksPage() {
       {/* Task Detail Drawer */}
       <Drawer
         title={
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              flexWrap: "wrap",
+            }}
+          >
             <span style={{ fontWeight: 700, fontSize: "1.1rem" }}>
               {selectedTask?.title}
             </span>
@@ -684,7 +1109,10 @@ export default function TasksPage() {
         destroyOnClose={true}
         extra={
           <Space>
-            <Button icon={<RiEditLine />} onClick={() => openEditModal(selectedTask)}>
+            <Button
+              icon={<RiEditLine />}
+              onClick={() => openEditModal(selectedTask)}
+            >
               Edit
             </Button>
             <Button
@@ -698,7 +1126,9 @@ export default function TasksPage() {
         }
       >
         {selectedTask && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "20px" }}
+          >
             {/* Human-in-the-Loop Review Banner */}
             <div
               style={{
@@ -716,31 +1146,57 @@ export default function TasksPage() {
                   marginBottom: selectedTask.hitl?.required ? "12px" : "0",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
                   <RiShieldCheckLine
                     style={{
                       fontSize: "1.3rem",
-                      color: selectedTask.hitl?.required ? "#d97706" : "#64748b",
+                      color: selectedTask.hitl?.required
+                        ? "#d97706"
+                        : "#64748b",
                     }}
                   />
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: "0.95rem", color: "#1e293b" }}>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: "0.95rem",
+                        color: "#1e293b",
+                      }}
+                    >
                       Human-in-the-Loop (HITL) Status
                     </div>
                     <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                      Flag this work item if human review, design sign-off, or intervention is needed.
+                      Flag this work item if human review, design sign-off, or
+                      intervention is needed.
                     </div>
                   </div>
                 </div>
                 <Switch
                   checked={Boolean(selectedTask.hitl?.required)}
-                  onChange={(checked) => handleToggleHitl(selectedTask, checked)}
+                  onChange={(checked) =>
+                    handleToggleHitl(selectedTask, checked)
+                  }
                 />
               </div>
 
               {selectedTask.hitl?.required && (
-                <div style={{ marginTop: "12px", borderTop: "1px dashed #fde68a", paddingTop: "12px" }}>
-                  <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#92400e", marginBottom: "6px" }}>
+                <div
+                  style={{
+                    marginTop: "12px",
+                    borderTop: "1px dashed #fde68a",
+                    paddingTop: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      color: "#92400e",
+                      marginBottom: "6px",
+                    }}
+                  >
                     Reason / Human Attention Required:
                   </div>
                   <Input.TextArea
@@ -752,12 +1208,14 @@ export default function TasksPage() {
                       updateTask(
                         selectedTask.id,
                         { hitl: { ...selectedTask.hitl, reason } },
-                        activeProject?.id
+                        activeProject?.id,
                       );
                       setTasks(getProjectTasks(activeProject?.id));
                     }}
                   />
-                  <div style={{ marginTop: "10px", display: "flex", gap: "8px" }}>
+                  <div
+                    style={{ marginTop: "10px", display: "flex", gap: "8px" }}
+                  >
                     <Button
                       size="small"
                       type="primary"
@@ -783,8 +1241,22 @@ export default function TasksPage() {
             </div>
 
             {/* Quick State Transition Actions */}
-            <div style={{ background: "#ffffff", padding: "14px", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-              <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569", marginBottom: "10px" }}>
+            <div
+              style={{
+                background: "#ffffff",
+                padding: "14px",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  color: "#475569",
+                  marginBottom: "10px",
+                }}
+              >
                 Workflow State Transitions
               </div>
               <Space wrap>
@@ -792,7 +1264,9 @@ export default function TasksPage() {
                   <Button
                     key={col.id}
                     size="small"
-                    type={selectedTask.status === col.id ? "primary" : "default"}
+                    type={
+                      selectedTask.status === col.id ? "primary" : "default"
+                    }
                     style={
                       selectedTask.status === col.id
                         ? { background: col.color, borderColor: col.color }
@@ -807,11 +1281,25 @@ export default function TasksPage() {
             </div>
 
             {/* Deliverable Metadata Badges */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+              }}
+            >
+              {selectedTask.wbsCode && (
+                <div style={metaBoxStyle}>
+                  <div style={metaLabelStyle}>WBS Code</div>
+                  <div style={metaValueStyle}>{selectedTask.wbsCode}</div>
+                </div>
+              )}
               {selectedTask.pbsDeliverableRef && (
                 <div style={metaBoxStyle}>
                   <div style={metaLabelStyle}>PBS Deliverable Ref</div>
-                  <div style={metaValueStyle}>{selectedTask.pbsDeliverableRef}</div>
+                  <div style={metaValueStyle}>
+                    {selectedTask.pbsDeliverableRef}
+                  </div>
                 </div>
               )}
               {selectedTask.pdpStageRef && (
@@ -830,16 +1318,225 @@ export default function TasksPage() {
                 <div style={metaBoxStyle}>
                   <div style={metaLabelStyle}>Source Origin</div>
                   <div style={metaValueStyle}>
-                    {selectedTask.source === "wbs_sync" ? "WBS Automatic Ingestion" : "Manual Authoring"}
+                    {selectedTask.source === "wbs_sync"
+                      ? "WBS Automatic Ingestion"
+                      : "Manual Authoring"}
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Task Dependencies, Execution Wave & Critical Path */}
+            <div
+              style={{
+                background: "#ffffff",
+                padding: "16px",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "12px",
+                  borderBottom: "1px solid #f1f5f9",
+                  paddingBottom: "8px",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: "0.95rem",
+                    color: "#0f172a",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <RiGitMergeLine
+                    style={{ color: "#2563eb", fontSize: "1.1rem" }}
+                  />
+                  Dependencies & Critical Path
+                </h3>
+                <Space size={4} wrap>
+                  {selectedTask.isCriticalPath ? (
+                    <Tag color="red" style={{ fontWeight: 700 }}>
+                      🔥 Critical Path (Zero Float)
+                    </Tag>
+                  ) : (
+                    <Tag color="default">Standard Path</Tag>
+                  )}
+                  {selectedTask.parallelGroup && (
+                    <Tag color="geekblue">🌊 {selectedTask.parallelGroup}</Tag>
+                  )}
+                </Space>
+              </div>
+
+              {/* Prerequisites Section */}
+              <div style={{ marginBottom: "14px" }}>
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    color: "#475569",
+                    marginBottom: "6px",
+                  }}
+                >
+                  Prerequisites (Upstream Tasks):
+                </div>
+                {!selectedTask.dependencies ||
+                selectedTask.dependencies.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: "0.82rem",
+                      color: "#166534",
+                      background: "#f0fdf4",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid #bbf7d0",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <RiCheckFill
+                      style={{ fontSize: "1rem", color: "#16a34a" }}
+                    />
+                    <span>
+                      No prerequisites — Root deliverable ready for immediate,
+                      parallel agent assignment.
+                    </span>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                    }}
+                  >
+                    {taskDependencyMap[selectedTask.id]?.unresolvedPrereqs.map(
+                      (p) => (
+                        <div
+                          key={p.code}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "6px 10px",
+                            background: "#fff1f2",
+                            border: "1px solid #fecdd3",
+                            borderRadius: "4px",
+                            fontSize: "0.82rem",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600, color: "#9f1239" }}>
+                            WBS {p.code}
+                            {p.task
+                              ? `: ${p.task.title}`
+                              : " (External / Not Ingested)"}
+                          </span>
+                          <Tag color="error">
+                            {p.task
+                              ? `Pending (${COLUMNS.find((c) => c.id === p.task.status)?.title || p.task.status})`
+                              : "Unresolved"}
+                          </Tag>
+                        </div>
+                      ),
+                    )}
+                    {taskDependencyMap[selectedTask.id]?.resolvedPrereqs.map(
+                      (p) => (
+                        <div
+                          key={p.code}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "6px 10px",
+                            background: "#f0fdf4",
+                            border: "1px solid #bbf7d0",
+                            borderRadius: "4px",
+                            fontSize: "0.82rem",
+                          }}
+                        >
+                          <span style={{ color: "#166534" }}>
+                            WBS {p.code}
+                            {p.task ? `: ${p.task.title}` : ""}
+                          </span>
+                          <Tag color="success">Done</Tag>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Downstream Tasks Section */}
+              <div>
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    color: "#475569",
+                    marginBottom: "6px",
+                  }}
+                >
+                  Downstream Dependents (Tasks waiting on this work package):
+                </div>
+                {!taskDependencyMap[selectedTask.id]?.downstream ||
+                taskDependencyMap[selectedTask.id].downstream.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: "0.82rem",
+                      color: "#64748b",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    No other tasks currently blocked by this work package.
+                  </div>
+                ) : (
+                  <div
+                    style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}
+                  >
+                    {taskDependencyMap[selectedTask.id].downstream.map(
+                      (down) => (
+                        <Tag key={down.id} color="purple">
+                          {down.wbsCode ? `[${down.wbsCode}] ` : ""}
+                          {down.title} (
+                          {COLUMNS.find((c) => c.id === down.status)?.title ||
+                            down.status}
+                          )
+                        </Tag>
+                      ),
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Scope, DoD, PERT, and Breakdown Content */}
             {selectedTask.summary ? (
-              <div style={{ background: "#ffffff", padding: "18px", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                <h3 style={{ margin: "0 0 12px 0", fontSize: "1rem", color: "#0f172a", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+              <div
+                style={{
+                  background: "#ffffff",
+                  padding: "18px",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                }}
+              >
+                <h3
+                  style={{
+                    margin: "0 0 12px 0",
+                    fontSize: "1rem",
+                    color: "#0f172a",
+                    borderBottom: "1px solid #f1f5f9",
+                    paddingBottom: "8px",
+                  }}
+                >
                   Detailed Work Breakdown & Scope
                 </h3>
                 <MarkdownRenderer content={selectedTask.summary} />
@@ -858,11 +1555,27 @@ export default function TasksPage() {
         onOk={handleSaveForm}
         onCancel={() => setIsAddModalOpen(false)}
         okText={editingTask ? "Save Changes" : "Create Task"}
-        okButtonProps={{ style: { background: "#003d4f", borderColor: "#003d4f" } }}
+        okButtonProps={{
+          style: { background: "#003d4f", borderColor: "#003d4f" },
+        }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "16px" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "14px",
+            marginTop: "16px",
+          }}
+        >
           <div>
-            <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+            <label
+              style={{
+                display: "block",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                marginBottom: "4px",
+              }}
+            >
               Task Title *
             </label>
             <Input
@@ -872,9 +1585,65 @@ export default function TasksPage() {
             />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px",
+            }}
+          >
             <div>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
+                WBS Code
+              </label>
+              <Input
+                placeholder="e.g. 2.1.3"
+                value={formWbsCode}
+                onChange={(e) => setFormWbsCode(e.target.value)}
+              />
+            </div>
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
+                Parallel Execution Wave / Track
+              </label>
+              <Input
+                placeholder="e.g. Wave 1 - Foundation"
+                value={formParallelGroup}
+                onChange={(e) => setFormParallelGroup(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px",
+            }}
+          >
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
                 Column / Status
               </label>
               <Select
@@ -885,7 +1654,14 @@ export default function TasksPage() {
               />
             </div>
             <div>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
                 WBS Level
               </label>
               <Input
@@ -896,9 +1672,43 @@ export default function TasksPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                marginBottom: "4px",
+              }}
+            >
+              Prerequisites / Upstream Dependencies
+            </label>
+            <Select
+              mode="tags"
+              placeholder="Select existing task or enter WBS code..."
+              value={formDependencies}
+              onChange={setFormDependencies}
+              style={{ width: "100%" }}
+              options={dependencyOptions}
+            />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px",
+            }}
+          >
             <div>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
                 PBS Deliverable Ref
               </label>
               <Input
@@ -908,7 +1718,14 @@ export default function TasksPage() {
               />
             </div>
             <div>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  marginBottom: "4px",
+                }}
+              >
                 PDP Stage Ref
               </label>
               <Input
@@ -919,8 +1736,51 @@ export default function TasksPage() {
             </div>
           </div>
 
+          <div
+            style={{
+              background: "#f8fafc",
+              padding: "10px 12px",
+              borderRadius: "6px",
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontSize: "0.85rem",
+                    color: "#1e293b",
+                  }}
+                >
+                  🔥 Critical Path Work Item
+                </span>
+                <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                  Directly affects minimum project timeline (zero float).
+                </div>
+              </div>
+              <Switch
+                checked={formIsCriticalPath}
+                onChange={setFormIsCriticalPath}
+              />
+            </div>
+          </div>
+
           <div>
-            <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>
+            <label
+              style={{
+                display: "block",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                marginBottom: "4px",
+              }}
+            >
               Scope, Completion Criteria & PERT (Markdown)
             </label>
             <Input.TextArea
@@ -931,8 +1791,21 @@ export default function TasksPage() {
             />
           </div>
 
-          <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div
+            style={{
+              background: "#f8fafc",
+              padding: "12px",
+              borderRadius: "6px",
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
               <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>
                 Requires Human-in-the-Loop Review (HITL)
               </span>
@@ -952,6 +1825,83 @@ export default function TasksPage() {
             )}
           </div>
         </div>
+      </Modal>
+
+      {/* Confirmation Modal for Blocked Task Move */}
+      <Modal
+        title={
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              color: "#b45309",
+            }}
+          >
+            <RiAlertFill style={{ fontSize: "1.3rem", color: "#d97706" }} />
+            <span>Prerequisites Not Completed</span>
+          </div>
+        }
+        open={Boolean(pendingMove)}
+        onOk={() => {
+          if (pendingMove) {
+            executeMove(pendingMove.task, pendingMove.targetStatus);
+            setPendingMove(null);
+          }
+        }}
+        onCancel={() => setPendingMove(null)}
+        okText="Proceed to In Progress"
+        cancelText="Keep in Backlog"
+        okButtonProps={{
+          style: { background: "#d97706", borderColor: "#d97706" },
+        }}
+      >
+        {pendingMove && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              marginTop: "12px",
+            }}
+          >
+            <p style={{ margin: 0, fontSize: "0.9rem", color: "#334155" }}>
+              Task <strong>"{pendingMove.task.title}"</strong> has unresolved
+              prerequisite work package(s):
+            </p>
+            <div
+              style={{
+                background: "#fffbeb",
+                padding: "10px",
+                borderRadius: "6px",
+                border: "1px solid #fde68a",
+              }}
+            >
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: "20px",
+                  fontSize: "0.85rem",
+                  color: "#92400e",
+                }}
+              >
+                {pendingMove.unresolvedPrereqs.map((p) => (
+                  <li key={p.code}>
+                    <strong>WBS {p.code}</strong>
+                    {p.task
+                      ? ` (${p.task.title} - Status: ${COLUMNS.find((c) => c.id === p.task.status)?.title || p.task.status})`
+                      : " (External / Not Ingested)"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>
+              Assigning agents or starting this task before prerequisites finish
+              may cause integration conflicts or rework. Do you want to proceed
+              anyway?
+            </p>
+          </div>
+        )}
       </Modal>
     </div>
   );

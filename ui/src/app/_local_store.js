@@ -456,11 +456,7 @@ export const getProjectFollowUps = (promptId = null, projectId = null) => {
   }
 };
 
-export const saveProjectFollowUps = (
-  promptId,
-  followUps,
-  projectId = null,
-) => {
+export const saveProjectFollowUps = (promptId, followUps, projectId = null) => {
   try {
     const activeId = projectId || getActiveProjectId();
     const resolvedPrompt = promptId || "default";
@@ -652,6 +648,14 @@ export const deleteProjectTasks = (projectId = null) => {
   }
 };
 
+export const extractWbsCode = (title = "") => {
+  if (!title || typeof title !== "string") return "";
+  const match =
+    title.match(/WBS\s*([0-9]+(?:\.[0-9]+)*)/i) ||
+    title.match(/^([0-9]+(?:\.[0-9]+)+)/);
+  return match ? match[1] : "";
+};
+
 export const syncWbsToTasks = (projectId = null) => {
   try {
     const activeId = projectId || getActiveProjectId();
@@ -676,15 +680,32 @@ export const syncWbsToTasks = (projectId = null) => {
         hasNew = true;
         const now = Date.now();
         const uniqueId = `task-wbs-${card.id || `item-${idx}`}-${now}-${Math.random().toString(36).substr(2, 5)}`;
+        const wbsCode =
+          (card.wbs_code && String(card.wbs_code).trim()) ||
+          extractWbsCode(card.title);
+        const dependencies = Array.isArray(card.dependencies)
+          ? card.dependencies.map((d) => String(d).trim()).filter(Boolean)
+          : [];
+        const isCriticalPath = Boolean(
+          card.is_critical_path ||
+          (card.summary &&
+            /Critical Path Status\**:\s*\[?Yes/i.test(card.summary)),
+        );
+        const parallelGroup = card.parallel_group || card.execution_wave || "";
+
         newTasks.push({
           id: uniqueId,
           source: "wbs_sync",
           sourceRef: cardRef,
           title: card.title || "Untitled WBS Work Package",
+          wbsCode,
           wbsLevel: card.wbs_level || "Level 3 - Work Package",
           pbsDeliverableRef: card.pbs_deliverable_ref || "",
           pdpStageRef: card.pdp_stage_ref || "",
           summary: card.summary || "",
+          dependencies,
+          isCriticalPath,
+          parallelGroup,
           selfReview: card["self-review"] || "",
           status: "backlog",
           hitl: {
@@ -719,9 +740,15 @@ export const createTask = (taskData, projectId = null) => {
     title: taskData.title || "New Task",
     status: taskData.status || "backlog",
     summary: taskData.summary || "",
+    wbsCode: taskData.wbsCode || extractWbsCode(taskData.title),
     wbsLevel: taskData.wbsLevel || "Work Item",
     pbsDeliverableRef: taskData.pbsDeliverableRef || "",
     pdpStageRef: taskData.pdpStageRef || "",
+    dependencies: Array.isArray(taskData.dependencies)
+      ? taskData.dependencies.map((d) => String(d).trim()).filter(Boolean)
+      : [],
+    isCriticalPath: Boolean(taskData.isCriticalPath),
+    parallelGroup: taskData.parallelGroup || "",
     hitl: taskData.hitl || { required: false, reason: "" },
     createdAt: now,
     updatedAt: now,
@@ -756,7 +783,6 @@ export const deleteTask = (taskId, projectId = null) => {
   saveProjectTasks(filtered, activeId);
   return true;
 };
-
 
 export const hydrateFromBackend = async () => {
   const serverState = await syncWithBackend("/api/persistence/state", {
@@ -921,13 +947,10 @@ export const addToPinboard = (key, content, isUserDefined = false) => {
     pinboardEntries.unshift([key.toString(), value]);
     pinboardMap = Object.fromEntries(pinboardEntries);
     localStorage.setItem(storageKey, JSON.stringify(pinboardMap));
-    syncWithBackend(
-      `/api/projects/${encodeURIComponent(activeId)}/pinboard`,
-      {
-        method: "POST",
-        body: JSON.stringify({ key: key.toString(), value }),
-      },
-    );
+    syncWithBackend(`/api/projects/${encodeURIComponent(activeId)}/pinboard`, {
+      method: "POST",
+      body: JSON.stringify({ key: key.toString(), value }),
+    });
     toast.success("Text pinned successfully! You can view it on the Pinboard.");
   } catch (error) {
     console.log(error.message);
@@ -1139,4 +1162,3 @@ export const deleteProjectWorkflow = (projectId = null) => {
 export const resetProjectWorkflow = (projectId = null) => {
   return deleteProjectWorkflow(projectId);
 };
-
