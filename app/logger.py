@@ -11,8 +11,15 @@ class HaivenLogger:
         print("instantiating HaivenLogger")
         loguru_logger.remove()
 
+        loguru_logger.configure(patcher=HaivenLogger.patching)
         self.logger = loguru_logger.patch(HaivenLogger.patching)
-        self.logger.add(sys.stdout, format="{extra[serialized]}")
+        self.logger.add(
+            sys.stdout,
+            format=lambda r: (
+                r["extra"].setdefault("serialized", HaivenLogger.serialize(r)),
+                "{extra[serialized]}\n",
+            )[1],
+        )
 
         self.logger.level("ANALYTICS", no=60)
 

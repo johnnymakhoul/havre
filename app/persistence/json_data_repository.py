@@ -156,6 +156,8 @@ class JsonDataRepository(DataRepositoryInterface):
                 "timestamp": timestamp,
                 "isDefault": False,
             }
+            if "github" in project_data and project_data["github"] is not None:
+                new_project["github"] = copy.deepcopy(project_data["github"])
             existing_idx = next(
                 (
                     i
@@ -191,6 +193,12 @@ class JsonDataRepository(DataRepositoryInterface):
                         and len(updates["sections"]) > 0
                     ):
                         project["sections"] = updates["sections"]
+                    if "github" in updates:
+                        project["github"] = (
+                            copy.deepcopy(updates["github"])
+                            if updates["github"] is not None
+                            else None
+                        )
                     self._save()
                     return copy.deepcopy(project)
             return None

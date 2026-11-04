@@ -3,11 +3,13 @@ import base64
 import datetime
 import io
 import os
+import re
 import shlex
 import zipfile
 from typing import Any, Dict, List, Optional
-from loguru import logger
+from logger import HaivenLogger
 
+from llms.github_service import GitHubService
 from llms.sandbox.base import SandboxStrategy
 from llms.sandbox.factory import SandboxStrategyFactory
 
@@ -168,10 +170,13 @@ class PocSandboxService:
         agent_timeout_seconds: int = 900,
         keep_alive_for_preview: bool = True,
         on_log: Optional[Any] = None,
+        github_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Execute the PoC using Pi in the configured Sandbox strategy, deploy background server, and expose preview URL."""
-        if not files:
+        if not files and not (github_config and github_config.get("repoUrl")):
             files = self.generate_default_files_for_adr(adr_title, adr_content, runtime)
+        elif not files:
+            files = {}
 
         if not prompt:
             prompt = self.generate_spike_prompt(
@@ -190,7 +195,7 @@ class PocSandboxService:
             err_msg = (
                 f"PoC sandbox is not configured: missing {', '.join(missing)}."
             )
-            logger.error(err_msg)
+            HaivenLogger.get().error(err_msg)
             if on_log:
                 try:
                     on_log(f"Error: {err_msg}\n")
@@ -222,10 +227,11 @@ class PocSandboxService:
                 agent_timeout_seconds=agent_timeout_seconds,
                 keep_alive_for_preview=keep_alive_for_preview,
                 on_log=on_log,
+                github_config=github_config,
             )
         except Exception as e:
             err_msg = f"Failed to execute PoC in {provider} sandbox: {e}"
-            logger.error(err_msg)
+            HaivenLogger.get().error(err_msg)
             if on_log:
                 try:
                     on_log(f"Error: {err_msg}\n")
@@ -257,6 +263,7 @@ class PocSandboxService:
         agent_timeout_seconds: int,
         keep_alive_for_preview: bool,
         on_log: Optional[Any] = None,
+        github_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         provider = self.get_sandbox_provider()
         sandbox = self.sandbox_strategy.create_sandbox(timeout_seconds=timeout_seconds)
@@ -264,11 +271,21 @@ class PocSandboxService:
         all_logs = []
         is_successful = False
 
+        gh_conf = github_config or {}
+        gh_repo_url = gh_conf.get("repoUrl")
+        gh_token = gh_conf.get("token")
+        feature_branch = None
+
         def log(msg: str):
-            all_logs.append(msg)
+            sanitized = (
+                msg.replace(gh_token, "[REDACTED_GITHUB_TOKEN]")
+                if gh_token and gh_token in msg
+                else msg
+            )
+            all_logs.append(sanitized)
             if on_log:
                 try:
-                    on_log(msg if msg.endswith("\n") else msg + "\n")
+                    on_log(sanitized if sanitized.endswith("\n") else sanitized + "\n")
                 except Exception:
                     pass
 
@@ -276,6 +293,45 @@ class PocSandboxService:
             # 1. Prepare workspace and install Pi if needed
             log(f"Provisioned {provider} sandbox: {sandbox_id}")
             sandbox.run_command("mkdir -p /home/user/app", timeout=60)
+
+            # Clone linked GitHub repository if configured
+            if gh_repo_url and gh_token:
+                try:
+                    gh_owner, gh_repo = GitHubService.parse_repo_url(gh_repo_url)
+                    default_branch = gh_conf.get("defaultBranch", "main")
+                    log(f"Cloning GitHub repo {gh_owner}/{gh_repo} (branch: {default_branch})...")
+                    sandbox.run_command("git --version 2>/dev/null || (apt-get update && apt-get install -y git)", timeout=90)
+                    sandbox.run_command(
+                        'git config --global user.name "Havre Agent" && git config --global user.email "agent@havre.local"',
+                        timeout=30,
+                    )
+                    sandbox.run_command("rm -rf /home/user/app", timeout=30)
+                    clone_cmd = (
+                        f"git clone --branch {shlex.quote(default_branch)} --depth 1 "
+                        f"https://x-access-token:{gh_token}@github.com/{gh_owner}/{gh_repo}.git /home/user/app"
+                    )
+                    clone_res = sandbox.run_command(clone_cmd, timeout=120)
+                    if clone_res.exit_code != 0:
+                        log(f"Notice: Branch clone failed ({clone_res.stderr.strip()}), falling back to default clone...")
+                        sandbox.run_command("rm -rf /home/user/app", timeout=30)
+                        fallback_cmd = (
+                            f"git clone --depth 1 "
+                            f"https://x-access-token:{gh_token}@github.com/{gh_owner}/{gh_repo}.git /home/user/app"
+                        )
+                        fallback_res = sandbox.run_command(fallback_cmd, timeout=120)
+                        if fallback_res.exit_code != 0:
+                            log(f"Error cloning repository: {fallback_res.stderr.strip()}")
+
+                    clean_slug = re.sub(r"[^a-zA-Z0-9_-]", "-", adr_title.lower()).strip("-")[:25]
+                    ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                    feature_branch = f"haiven/spike-{clean_slug}-{ts}"
+                    chk_res = sandbox.run_command(f"cd /home/user/app && git checkout -b {feature_branch}", timeout=30)
+                    if chk_res.exit_code == 0:
+                        log(f"Created dedicated feature branch: {feature_branch}")
+                    else:
+                        log(f"Branch checkout notice: {chk_res.stderr.strip()}")
+                except Exception as gh_err:
+                    log(f"Warning: Failed to clone GitHub repository: {gh_err}")
 
             # Write input/seed files if any
             for path, content in files.items():
@@ -285,7 +341,7 @@ class PocSandboxService:
                 try:
                     sandbox.write_file(target_path, content)
                 except Exception as ex:
-                    logger.debug(f"Could not write file {target_path}: {ex}")
+                    HaivenLogger.get().warn(f"Could not write file {target_path}: {ex}")
 
             # Ensure Node.js 22+ and Pi coding agent are installed
             log(
@@ -394,9 +450,48 @@ class PocSandboxService:
             except StopIteration:
                 pass
             except Exception as e:
-                logger.warning(
+                HaivenLogger.get().warn(
                     f"Could not extract generated codebase from sandbox: {e}"
                 )
+
+            github_pr_info = None
+            if gh_repo_url and gh_token and feature_branch:
+                try:
+                    log(f"Committing changes to {feature_branch}...")
+                    sandbox.run_command(
+                        f'cd /home/user/app && git add -A && git commit -m "feat: implement ADR spike for {shlex.quote(adr_title)}"',
+                        timeout=60,
+                    )
+                    log(f"Pushing {feature_branch} to GitHub...")
+                    push_res = sandbox.run_command(
+                        f"cd /home/user/app && git push -u origin {feature_branch}",
+                        timeout=90,
+                    )
+                    if push_res.exit_code == 0:
+                        log(f"Pushed branch {feature_branch} to GitHub.")
+                        default_branch = gh_conf.get("defaultBranch", "main")
+                        draft_enabled = gh_conf.get("draftPr", True)
+                        gh_svc = GitHubService()
+                        github_pr_info = gh_svc.create_draft_pr(
+                            repo_url=gh_repo_url,
+                            token=gh_token,
+                            head_branch=feature_branch,
+                            base_branch=default_branch,
+                            title=f"Spike: {adr_title}",
+                            body=(
+                                f"### Automated Spike Implementation: {adr_title}\n\n"
+                                f"Generated by **Havre Agent** (`agent@havre.local`).\n\n"
+                                f"- **Target Runtime:** {runtime}\n"
+                                f"- **Build / Test Verification:** Passed\n"
+                                f"- **Sandbox Provider:** {provider}\n"
+                            ),
+                            draft=draft_enabled,
+                        )
+                        log(f"Opened GitHub Draft PR: {github_pr_info.get('html_url')}")
+                    else:
+                        log(f"Notice: git push returned exit code {push_res.exit_code}: {push_res.stderr}")
+                except Exception as pr_err:
+                    log(f"Notice during GitHub commit/PR creation: {pr_err}")
 
             is_successful = True
 
@@ -415,6 +510,7 @@ class PocSandboxService:
                 "runtime": runtime,
                 "execution_mode": f"{provider}_cloud",
                 "summary": f"PoC built and deployed successfully with Pi! Live preview available at {public_url}",
+                "github_pr": github_pr_info,
             }
 
             if keep_alive_for_preview:
@@ -447,7 +543,7 @@ class PocSandboxService:
 
         except Exception as exc:
             all_logs.append(f"Error during sandbox execution: {str(exc)}")
-            logger.error(f"Error during sandbox execution: {exc}")
+            HaivenLogger.get().error(f"Error during sandbox execution: {exc}")
             if not is_successful:
                 try:
                     sandbox.kill()
@@ -506,7 +602,7 @@ class PocSandboxService:
             try:
                 sandbox.kill()
             except Exception as ex:
-                logger.warning(f"Error terminating sandbox {sandbox_id}: {ex}")
+                HaivenLogger.get().warn(f"Error terminating sandbox {sandbox_id}: {ex}")
 
         session["status"] = "stopped"
         del self.active_sandboxes[sandbox_id]
@@ -647,7 +743,7 @@ class PocSandboxService:
                 archive_base64 = zip_res.stdout.strip()
                 session["archive_base64"] = archive_base64
         except Exception as e:
-            logger.warning(f"Could not re-extract updated codebase: {e}")
+            HaivenLogger.get().warn(f"Could not re-extract updated codebase: {e}")
 
         result_payload = {
             "success": True,

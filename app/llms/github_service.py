@@ -1,0 +1,167 @@
+# © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
+import json
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Dict, Optional, Tuple
+from logger import HaivenLogger
+
+
+class GitHubService:
+    """Service to interact with GitHub REST API for repository verification and PR creation."""
+
+    BASE_API_URL = "https://api.github.com"
+
+    @staticmethod
+    def parse_repo_url(repo_url: str) -> Tuple[str, str]:
+        """Extract owner and repo name from various GitHub URL formats.
+        
+        Examples:
+            - https://github.com/octocat/Hello-World
+            - https://github.com/octocat/Hello-World.git
+            - git@github.com:octocat/Hello-World.git
+            - octocat/Hello-World
+        """
+        clean_url = repo_url.strip()
+        if clean_url.endswith(".git"):
+            clean_url = clean_url[:-4]
+
+        # Match github.com/owner/repo or github.com:owner/repo
+        match = re.search(r"github\.com[/:]([\w.-]+)/([\w.-]+)", clean_url)
+        if match:
+            return match.group(1), match.group(2)
+
+        # Match plain owner/repo
+        match_simple = re.match(r"^([\w.-]+)/([\w.-]+)$", clean_url)
+        if match_simple:
+            return match_simple.group(1), match_simple.group(2)
+
+        raise ValueError(
+            f"Invalid GitHub repository URL: '{repo_url}'. Expected format 'https://github.com/owner/repo' or 'owner/repo'."
+        )
+
+    def _make_request(
+        self,
+        endpoint: str,
+        token: Optional[str] = None,
+        method: str = "GET",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Make an authenticated HTTP request to GitHub REST API."""
+        url = f"{self.BASE_API_URL}{endpoint}"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Haiven-Agent/1.0",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token.strip()}"
+
+        data_bytes = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            data_bytes = json.dumps(payload).encode("utf-8")
+
+        req = urllib.request.Request(
+            url=url, data=data_bytes, headers=headers, method=method
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp_body = resp.read().decode("utf-8")
+                return json.loads(resp_body) if resp_body else {}
+        except urllib.error.HTTPError as e:
+            error_msg = f"GitHub API error ({e.code})"
+            try:
+                body = e.read().decode("utf-8")
+                details = json.loads(body)
+                if "message" in details:
+                    error_msg = f"{error_msg}: {details['message']}"
+            except Exception:
+                pass
+            HaivenLogger.get().error(f"GitHub API HTTP error: {error_msg}")
+            raise ValueError(error_msg) from e
+        except Exception as e:
+            HaivenLogger.get().error(f"GitHub API connection error: {str(e)}")
+            raise ValueError(f"Could not connect to GitHub API: {str(e)}") from e
+
+    def verify_connection(self, repo_url: str, token: str) -> Dict[str, Any]:
+        """Verify token and repository access.
+        
+        Returns repo metadata, default branch, and permissions.
+        """
+        owner, repo = self.parse_repo_url(repo_url)
+        HaivenLogger.get().info(f"Verifying GitHub repository access for {owner}/{repo}")
+
+        repo_data = self._make_request(f"/repos/{owner}/{repo}", token=token)
+
+        permissions = repo_data.get("permissions", {})
+        has_push = permissions.get("push", False)
+        default_branch = repo_data.get("default_branch", "main")
+        is_private = repo_data.get("private", False)
+
+        return {
+            "valid": True,
+            "owner": owner,
+            "repo": repo,
+            "full_name": repo_data.get("full_name", f"{owner}/{repo}"),
+            "default_branch": default_branch,
+            "is_private": is_private,
+            "can_push": has_push,
+            "html_url": repo_data.get("html_url", f"https://github.com/{owner}/{repo}"),
+        }
+
+    def create_draft_pr(
+        self,
+        repo_url: str,
+        token: str,
+        head_branch: str,
+        base_branch: Optional[str] = None,
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+        draft: bool = True,
+    ) -> Dict[str, Any]:
+        """Create a Pull Request (Draft by default) on GitHub."""
+        owner, repo = self.parse_repo_url(repo_url)
+
+        if not base_branch:
+            # Query repository default branch
+            repo_info = self._make_request(f"/repos/{owner}/{repo}", token=token)
+            base_branch = repo_info.get("default_branch", "main")
+
+        pr_title = title or f"Haiven Agent: {head_branch}"
+        pr_body = (
+            body
+            or "### Haiven Agent Automated Implementation\n\nGenerated by Havre Agent (<agent@havre.local>)."
+        )
+
+        payload = {
+            "title": pr_title,
+            "body": pr_body,
+            "head": head_branch,
+            "base": base_branch,
+            "draft": draft,
+        }
+
+        HaivenLogger.get().info(
+            f"Creating Draft PR on {owner}/{repo}: {head_branch} -> {base_branch}"
+        )
+        pr_data = self._make_request(
+            f"/repos/{owner}/{repo}/pulls",
+            token=token,
+            method="POST",
+            payload=payload,
+        )
+
+        return {
+            "id": pr_data.get("id"),
+            "number": pr_data.get("number"),
+            "html_url": pr_data.get("html_url"),
+            "title": pr_data.get("title"),
+            "state": pr_data.get("state"),
+            "draft": pr_data.get("draft", True),
+            "head": head_branch,
+            "base": base_branch,
+        }
+

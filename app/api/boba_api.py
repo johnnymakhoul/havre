@@ -10,6 +10,7 @@ from api.api_key_management import ApiKeyManagementAPI
 from api.api_rules import ApiRules
 from api.api_persistence import ApiPersistence
 from api.api_poc import ApiPoc
+from api.api_github import ApiGitHub
 from persistence.data_repository import DataRepository
 from llms.chats import (
     ChatManager,
@@ -97,7 +98,8 @@ class BobaApi:
         ApiFeatures(app)
         ApiRules(app, self.config_service)
         ApiPersistence(app, self.data_repository)
-        ApiPoc(app, self.config_service)
+        ApiPoc(app, self.config_service, data_repository=self.data_repository)
+        ApiGitHub(app, self.data_repository)
         # Only register API key management endpoints if API key auth is enabled
         if self.api_key_auth_service and self.config_service.is_api_key_auth_enabled():
             ApiKeyManagementAPI(app, self.api_key_auth_service, self.config_service)

@@ -1,5 +1,5 @@
 // © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
-import { addToPinboard } from "../app/_local_store";
+import { addToPinboard, getActiveProject } from "../app/_local_store";
 import {
   RiFileCopyLine,
   RiChat2Line,
@@ -11,6 +11,7 @@ import {
   RiStopCircleLine,
   RiDownload2Line,
   RiSendPlaneFill,
+  RiGithubFill,
 } from "react-icons/ri";
 import {
   Button,
@@ -128,6 +129,9 @@ export default function CardActions({
         : "node") ||
       "node";
 
+    const activeProj = getActiveProject();
+    const githubConf = activeProj?.github?.repoUrl ? activeProj.github : null;
+
     const payload = {
       adr_title:
         scenario.title ||
@@ -136,6 +140,8 @@ export default function CardActions({
       runtime: runtime,
       preview_port: 3000,
       keep_alive_for_preview: true,
+      project_id: activeProj?.id,
+      github_config: githubConf,
     };
 
     executePocSpikeStream(
@@ -393,6 +399,36 @@ export default function CardActions({
                 </div>
               }
               type="success"
+              showIcon
+              style={{ marginBottom: "16px" }}
+            />
+          )}
+
+          {pocResult && pocResult.github_pr && (
+            <Alert
+              message={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                  <RiGithubFill style={{ fontSize: "18px" }} />
+                  GitHub Pull Request Created
+                </span>
+              }
+              description={
+                <div style={{ marginTop: "6px" }}>
+                  <p style={{ marginBottom: "8px" }}>
+                    Branch <code>{pocResult.github_pr.head}</code> pushed and Draft PR #{pocResult.github_pr.number} created on GitHub.
+                  </p>
+                  <Button
+                    type="primary"
+                    icon={<RiExternalLinkLine />}
+                    href={pocResult.github_pr.html_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View Draft Pull Request #{pocResult.github_pr.number}
+                  </Button>
+                </div>
+              }
+              type="info"
               showIcon
               style={{ marginBottom: "16px" }}
             />
