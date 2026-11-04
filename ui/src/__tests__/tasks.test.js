@@ -53,9 +53,15 @@ describe("Tasks Kanban Board Page", () => {
     expect(screen.getByText("Done")).toBeInTheDocument();
 
     // Check action buttons
-    expect(screen.getByRole("button", { name: /Add Task/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Sync WBS/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /HITL Only/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Add Task/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Sync WBS/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /HITL Only/i }),
+    ).toBeInTheDocument();
   });
 
   it("should auto-sync Detailed WBS cards into the Backlog column", async () => {
@@ -67,7 +73,8 @@ describe("Tasks Kanban Board Page", () => {
         wbs_level: "Level 3 - Work Package",
         pbs_deliverable_ref: "PBS 1.1: Core Storage",
         pdp_stage_ref: "PDP Stage 2: Architecture & Foundation",
-        summary: "**Scope of Work**: Build SQLite tables and migration scripts.",
+        summary:
+          "**Scope of Work**: Build SQLite tables and migration scripts.",
       },
       {
         id: "card-wbs-2",
@@ -78,7 +85,11 @@ describe("Tasks Kanban Board Page", () => {
         summary: "**Scope of Work**: Implement offline queue and retry policy.",
       },
     ];
-    saveProjectCards("work-breakdown-structure-cards-7f1a5e3c", wbsCards, "default");
+    saveProjectCards(
+      "work-breakdown-structure-cards-7f1a5e3c",
+      wbsCards,
+      "default",
+    );
 
     await act(async () => {
       render(<TasksPage />);
@@ -124,7 +135,11 @@ describe("Tasks Kanban Board Page", () => {
         title: "WBS 1.1.2: Client Sync Queue Worker",
       },
     ];
-    saveProjectCards("work-breakdown-structure-cards-7f1a5e3c", wbsCards, "default");
+    saveProjectCards(
+      "work-breakdown-structure-cards-7f1a5e3c",
+      wbsCards,
+      "default",
+    );
 
     await act(async () => {
       render(<TasksPage />);
@@ -156,7 +171,9 @@ describe("Tasks Kanban Board Page", () => {
     // Fill form
     const titleInput = screen.getByPlaceholderText(/e\.g\. WBS 2\.1\.3/i);
     await act(async () => {
-      fireEvent.change(titleInput, { target: { value: "Custom Security Audit Task" } });
+      fireEvent.change(titleInput, {
+        target: { value: "Custom Security Audit Task" },
+      });
     });
 
     // Submit modal form
@@ -167,7 +184,9 @@ describe("Tasks Kanban Board Page", () => {
 
     expect(screen.getByText("Custom Security Audit Task")).toBeInTheDocument();
     const tasks = getProjectTasks("default");
-    expect(tasks.some((t) => t.title === "Custom Security Audit Task")).toBe(true);
+    expect(tasks.some((t) => t.title === "Custom Security Audit Task")).toBe(
+      true,
+    );
   });
 
   it("should open the exact clicked task in the detail drawer when multiple backlog items exist", async () => {
@@ -234,11 +253,15 @@ describe("Tasks Kanban Board Page", () => {
 
     // Click on the task card to open drawer
     await act(async () => {
-      fireEvent.click(screen.getByText("WBS 3.1: API Gateway Contract Implementation"));
+      fireEvent.click(
+        screen.getByText("WBS 3.1: API Gateway Contract Implementation"),
+      );
     });
 
     // Drawer header should be present
-    expect(screen.getByText("Human-in-the-Loop (HITL) Status")).toBeInTheDocument();
+    expect(
+      screen.getByText("Human-in-the-Loop (HITL) Status"),
+    ).toBeInTheDocument();
 
     // Toggle HITL switch to ON
     const hitlSwitch = screen.getByRole("switch");
@@ -269,7 +292,9 @@ describe("Tasks Kanban Board Page", () => {
 
     // Open detail drawer
     await act(async () => {
-      fireEvent.click(screen.getByText("WBS 4.1: Performance Stress Test Suite"));
+      fireEvent.click(
+        screen.getByText("WBS 4.1: Performance Stress Test Suite"),
+      );
     });
 
     // Move to "In Progress" using transition button
@@ -310,5 +335,166 @@ describe("Tasks Kanban Board Page", () => {
 
     expect(screen.queryByText("Task to be Deleted")).not.toBeInTheDocument();
     expect(getProjectTasks("default").length).toBe(0);
+  });
+
+  it("should sync WBS cards with structured dependencies, critical path, and parallel wave", async () => {
+    const wbsCards = [
+      {
+        id: "card-wbs-10",
+        title: "WBS 1.1: Core Database Engine",
+        wbs_code: "1.1",
+        dependencies: [],
+        is_critical_path: true,
+        parallel_group: "Wave 1 - Foundation",
+      },
+      {
+        id: "card-wbs-20",
+        title: "WBS 1.2: REST API Contracts",
+        wbs_code: "1.2",
+        dependencies: ["1.1"],
+        is_critical_path: true,
+        parallel_group: "Wave 2 - Core Services",
+      },
+    ];
+    saveProjectCards(
+      "work-breakdown-structure-cards-7f1a5e3c",
+      wbsCards,
+      "default",
+    );
+
+    await act(async () => {
+      render(<TasksPage />);
+    });
+
+    const tasks = getProjectTasks("default");
+    expect(tasks.length).toBe(2);
+
+    const task1 = tasks.find((t) => t.wbsCode === "1.1");
+    const task2 = tasks.find((t) => t.wbsCode === "1.2");
+
+    expect(task1.isCriticalPath).toBe(true);
+    expect(task1.parallelGroup).toBe("Wave 1 - Foundation");
+    expect(task2.dependencies).toEqual(["1.1"]);
+
+    // Task 1 has no dependencies -> should show Ready (Parallelizable)
+    expect(screen.getByText(/Ready \(Parallelizable\)/i)).toBeInTheDocument();
+
+    // Task 2 depends on Task 1 (which is still in Backlog) -> should show Blocked
+    expect(screen.getByText(/Blocked by: WBS 1.1/i)).toBeInTheDocument();
+
+    // Both should show Critical tags
+    const criticalBadges = screen.getAllByText(/🔥 Critical/i);
+    expect(criticalBadges.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("should display soft-enforcement warning when moving a blocked task to In Progress", async () => {
+    const initialTasks = [
+      {
+        id: "task-root",
+        title: "WBS 2.1: Data Models",
+        wbsCode: "2.1",
+        status: "backlog",
+        dependencies: [],
+      },
+      {
+        id: "task-child",
+        title: "WBS 2.2: Business Logic",
+        wbsCode: "2.2",
+        status: "backlog",
+        dependencies: ["2.1"],
+      },
+    ];
+    saveProjectTasks(initialTasks, "default");
+
+    await act(async () => {
+      render(<TasksPage />);
+    });
+
+    // Open detail drawer for task-child
+    await act(async () => {
+      fireEvent.click(screen.getByText("WBS 2.2: Business Logic"));
+    });
+
+    // Attempt to move to "In Progress"
+    const inProgressBtn = screen.getByRole("button", { name: "In Progress" });
+    await act(async () => {
+      fireEvent.click(inProgressBtn);
+    });
+
+    // Soft-enforcement confirmation modal should appear
+    expect(screen.getByText("Prerequisites Not Completed")).toBeInTheDocument();
+    expect(
+      screen.getByText(/has unresolved prerequisite work package/i),
+    ).toBeInTheDocument();
+
+    // Confirm the move
+    const proceedBtn = screen.getByRole("button", {
+      name: "Proceed to In Progress",
+    });
+    await act(async () => {
+      fireEvent.click(proceedBtn);
+    });
+
+    const tasks = getProjectTasks("default");
+    const updatedChild = tasks.find((t) => t.id === "task-child");
+    expect(updatedChild.status).toBe("in_progress");
+  });
+
+  it("should filter tasks by Ready (Parallel) and Critical Path", async () => {
+    const initialTasks = [
+      {
+        id: "task-ready-crit",
+        title: "Ready Critical Task",
+        wbsCode: "3.1",
+        status: "backlog",
+        dependencies: [],
+        isCriticalPath: true,
+      },
+      {
+        id: "task-blocked-noncrit",
+        title: "Blocked NonCritical Task",
+        wbsCode: "3.2",
+        status: "backlog",
+        dependencies: ["99.9"], // external/unresolved
+        isCriticalPath: false,
+      },
+    ];
+    saveProjectTasks(initialTasks, "default");
+
+    await act(async () => {
+      render(<TasksPage />);
+    });
+
+    expect(screen.getByText("Ready Critical Task")).toBeInTheDocument();
+    expect(screen.getByText("Blocked NonCritical Task")).toBeInTheDocument();
+
+    // Filter by Ready (Parallel)
+    const readyFilterBtn = screen.getByRole("button", {
+      name: /Ready \(Parallel\)/i,
+    });
+    await act(async () => {
+      fireEvent.click(readyFilterBtn);
+    });
+
+    expect(screen.getByText("Ready Critical Task")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Blocked NonCritical Task"),
+    ).not.toBeInTheDocument();
+
+    // Un-filter Ready and filter by Critical Path
+    await act(async () => {
+      fireEvent.click(readyFilterBtn); // toggle off
+    });
+    const critFilterBtn = screen.getByRole("button", {
+      name: /Critical Path/i,
+    });
+    await act(async () => {
+      fireEvent.click(critFilterBtn);
+    });
+
+    expect(screen.getByText("Ready Critical Task")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Blocked NonCritical Task"),
+    ).not.toBeInTheDocument();
   });
 });

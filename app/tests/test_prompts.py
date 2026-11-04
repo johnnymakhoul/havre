@@ -1709,6 +1709,10 @@ def test_work_breakdown_structure_prompts_and_flows():
         assert "user_input" in template_cards.input_variables
         assert "European B2B Wholesale Portal PBS Deliverables and PDP Stage Gates" in rendered_cards
         assert "Generate work packages for Checkout Microservice" in rendered_cards
+        assert "wbs_code" in rendered_cards
+        assert "dependencies" in rendered_cards
+        assert "is_critical_path" in rendered_cards
+        assert "parallel_group" in rendered_cards
         assert "wbs_level" in rendered_cards
         assert "pbs_deliverable_ref" in rendered_cards
         assert "pdp_stage_ref" in rendered_cards
@@ -1730,6 +1734,15 @@ def test_work_breakdown_structure_prompts_and_flows():
         assert wbs_spec.metadata["categories"] == ["specification"]
         assert wbs_spec.metadata["show"] is False
         assert wbs_spec.metadata["editable"] is True
+
+        rendered_spec, template_spec = prompt_list.render_prompt(
+            "work-breakdown-structure-spec-8a2b6f4d",
+            "Synthesize WBS cards into delivery plan",
+            {"context": "WBS cards context"},
+        )
+        assert "Predecessors / Dependencies" in rendered_spec
+        assert "Autonomous Agent Parallelism & Execution Waves" in rendered_spec
+        assert "Mermaid DAG" in rendered_spec
 
         # Verify follow-ups from WBS cards
         wbs_follow_ups = [

@@ -31,6 +31,12 @@ import {
   saveProjectWorkflow,
   deleteProjectWorkflow,
   resetProjectWorkflow,
+  extractWbsCode,
+  syncWbsToTasks,
+  createTask,
+  updateTask,
+  getProjectTasks,
+  saveProjectTasks,
 } from "../app/_local_store";
 import { toast } from "react-toastify";
 
@@ -497,7 +503,7 @@ describe("Local Store", () => {
         activeProjectId: "project-500",
         pinboard: {
           "project-500": {
-            "17000099": { content: "Server pinned note", isUserDefined: true },
+            17000099: { content: "Server pinned note", isUserDefined: true },
           },
         },
         contexts: {
@@ -555,8 +561,12 @@ describe("Local Store", () => {
       saveProjectCards("prompt-1", [{ title: "Default Card" }], "default");
       saveProjectCards("prompt-1", [{ title: "Proj 2 Card" }], "project-2");
 
-      expect(getProjectCards("prompt-1", "default")[0].title).toBe("Default Card");
-      expect(getProjectCards("prompt-1", "project-2")[0].title).toBe("Proj 2 Card");
+      expect(getProjectCards("prompt-1", "default")[0].title).toBe(
+        "Default Card",
+      );
+      expect(getProjectCards("prompt-1", "project-2")[0].title).toBe(
+        "Proj 2 Card",
+      );
     });
 
     it("should delete cards for a specific prompt", () => {
@@ -856,6 +866,85 @@ describe("Local Store", () => {
 
       resetProjectWorkflow("custom-proj");
       expect(getProjectWorkflow("custom-proj")).toBeNull();
+    });
+
+    it("should extract WBS codes correctly from titles", () => {
+      expect(extractWbsCode("WBS 2.1.3: Develop Offline Storage")).toBe(
+        "2.1.3",
+      );
+      expect(extractWbsCode("WBS 1.1 Setup CI")).toBe("1.1");
+      expect(extractWbsCode("3.4.1 Client Component")).toBe("3.4.1");
+      expect(extractWbsCode("No WBS Code Here")).toBe("");
+      expect(extractWbsCode(null)).toBe("");
+    });
+
+    it("should sync WBS cards with dependencies, critical path, and parallel wave into tasks", () => {
+      const wbsCards = [
+        {
+          id: "card-1",
+          title: "WBS 1.1: Core Database",
+          wbs_code: "1.1",
+          dependencies: [],
+          is_critical_path: true,
+          parallel_group: "Wave 1 - Infrastructure",
+        },
+        {
+          id: "card-2",
+          title: "WBS 1.2: API Layer",
+          wbs_code: "1.2",
+          dependencies: ["1.1"],
+          is_critical_path: true,
+          parallel_group: "Wave 2 - Core",
+        },
+      ];
+
+      saveProjectCards(
+        "work-breakdown-structure-cards-7f1a5e3c",
+        wbsCards,
+        "proj-wbs",
+      );
+      const synced = syncWbsToTasks("proj-wbs");
+
+      expect(synced.length).toBe(2);
+      expect(synced[0].wbsCode).toBe("1.1");
+      expect(synced[0].dependencies).toEqual([]);
+      expect(synced[0].isCriticalPath).toBe(true);
+      expect(synced[0].parallelGroup).toBe("Wave 1 - Infrastructure");
+
+      expect(synced[1].wbsCode).toBe("1.2");
+      expect(synced[1].dependencies).toEqual(["1.1"]);
+      expect(synced[1].isCriticalPath).toBe(true);
+      expect(synced[1].parallelGroup).toBe("Wave 2 - Core");
+    });
+
+    it("should create and update manual tasks with dependencies and critical path", () => {
+      const created = createTask(
+        {
+          title: "Manual Security Review",
+          wbsCode: "5.1",
+          dependencies: ["1.2"],
+          isCriticalPath: true,
+          parallelGroup: "Wave 3",
+        },
+        "proj-wbs",
+      );
+
+      expect(created.wbsCode).toBe("5.1");
+      expect(created.dependencies).toEqual(["1.2"]);
+      expect(created.isCriticalPath).toBe(true);
+      expect(created.parallelGroup).toBe("Wave 3");
+
+      const updated = updateTask(
+        created.id,
+        {
+          dependencies: ["1.2", "2.1"],
+          isCriticalPath: false,
+        },
+        "proj-wbs",
+      );
+
+      expect(updated.dependencies).toEqual(["1.2", "2.1"]);
+      expect(updated.isCriticalPath).toBe(false);
     });
   });
 });

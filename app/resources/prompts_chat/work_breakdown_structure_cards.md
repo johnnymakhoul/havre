@@ -35,6 +35,10 @@ Every WBS card must represent a discrete, bounded work package obeying the **100
    - **Required Roles & Headcount**: Explicit roles and fractional/full FTE allocation (e.g., 1.0 Senior Backend Engineer, 0.5 Security Specialist, 0.5 QA Automation Engineer).
    - **Required Technical Skills**: Specific frameworks, protocols, and architectural knowledge needed.
    - **RACI Responsibility**: Explicit assignment of Responsible, Accountable, Consulted, and Informed roles.
+4. **Task Dependencies, Critical Path & Agent Parallelism**:
+   - **Explicit Predecessors (`dependencies`)**: List prerequisite WBS codes that must be fully completed before this work package can start. If root/unblocked, provide an empty list `[]`.
+   - **Critical Path (`is_critical_path`)**: `true` if this work package sits directly on the longest sequence determining minimum project duration (zero float), `false` otherwise.
+   - **Parallel Execution Group / Wave (`parallel_group`)**: Designate the execution wave (e.g. `"Wave 1 - Foundation"`, `"Wave 2 - Core Services"`, `"Wave 3 - Integration"`). Work packages within the same wave with no mutual or unmet dependencies can be assigned to multiple autonomous agents to execute in parallel without colliding.
 
 ## Output Instructions
 
@@ -43,9 +47,13 @@ Respond ONLY with a valid JSON array of card objects (no surrounding markdown fe
 [
   {{
     "title": "WBS Code & Work Package Title (e.g., WBS 2.1.3: Develop B2B Offline SQLite Storage Engine & Sync Queue)",
+    "wbs_code": "WBS code (e.g., 2.1.3)",
     "wbs_level": "Level 3 - Work Package",
     "pbs_deliverable_ref": "PBS code & deliverable name (e.g., PBS 1.2.2: Offline SQLite Client Cache)",
     "pdp_stage_ref": "PDP stage name (e.g., PDP Stage 3: Core Service Build & Integration)",
+    "dependencies": ["1.2.1"],
+    "is_critical_path": true,
+    "parallel_group": "Wave 2 - Core Services",
     "summary": "**Scope of Work & Deliverable Outcome**:\n- **Actionable Scope**: [Detailed engineering activities, implementation tasks, unit/contract test authoring]\n- **Completion Criteria**: [Measurable DoD to mark this work package closed]\n\n**Time & Effort Estimation (Three-Point PERT)**:\n- **Optimistic (O)**: [X person-days] | **Most Likely (M)**: [Y person-days] | **Pessimistic (P)**: [Z person-days]\n- **PERT Expected Effort (E)**: [(O + 4M + P) / 6 person-days]\n- **Calendar Duration**: [Estimated elapsed calendar days/sprints based on allocated capacity]\n\n**Cost Breakdown & Budget Impact**:\n- **Labor Cost**: [Expected person-days * daily rate = €X,XXX]\n- **Non-Labor & Infrastructure**: [Cloud sandbox, SaaS API testing credits, specialized licenses = €XXX]\n- **Total Work Package Cost**: [Sum of labor + non-labor + recommended contingency buffer]\n\n**Resource Allocation & Staffing**:\n- **Assigned Roles & FTEs**: [e.g., 1.0 Senior Mobile/Web Engineer, 0.5 Backend Integration Specialist]\n- **Required Skillsets**: [e.g., TypeScript, IndexedDB / SQLite, Web Workers, OAuth2]\n- **RACI Governance**: [Responsible: Lead Dev; Accountable: Tech Lead; Consulted: Security; Informed: PM]\n\n**Dependencies & Critical Path**:\n- **Predecessors & Upstream Blockers**: [Prerequisite WBS work packages or external third-party feeds]\n- **Critical Path Status**: [Yes (on critical path) | No (has N days float)]",
     "self-review": "✅ or 🤔 sanity check confirming compliance with the 100% Rule, realistic labor rates/PERT variance, and valid dependencies."
   }}
