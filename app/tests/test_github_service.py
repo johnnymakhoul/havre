@@ -84,6 +84,28 @@ class TestGitHubService(unittest.TestCase):
         self.assertTrue(res["draft"])
         self.assertEqual(res["html_url"], "https://github.com/thoughtworks/haiven/pull/42")
 
+    @patch("urllib.request.urlopen")
+    def test_create_issue_success(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "id": 54321,
+            "number": 10,
+            "html_url": "https://github.com/thoughtworks/haiven/issues/10",
+            "title": "feat(WBS 1.1): Setup DB",
+            "state": "open",
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        res = self.service.create_issue(
+            repo_url="https://github.com/thoughtworks/haiven",
+            token="fake-token",
+            title="feat(WBS 1.1): Setup DB",
+            body="Task scope and DoD",
+            labels=["wbs-task"],
+        )
+        self.assertEqual(res["number"], 10)
+        self.assertEqual(res["html_url"], "https://github.com/thoughtworks/haiven/issues/10")
+
 
 class TestApiGitHub(unittest.TestCase):
     def setUp(self):

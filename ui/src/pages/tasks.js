@@ -1,5 +1,5 @@
 // © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Head from "next/head";
 import {
   Button,
@@ -15,6 +15,8 @@ import {
   Space,
   Empty,
   Badge,
+  Spin,
+  Alert,
 } from "antd";
 import {
   RiKanbanView2,
@@ -34,6 +36,10 @@ import {
   RiGitMergeLine,
   RiFireLine,
   RiRouteLine,
+  RiCodeBoxLine,
+  RiPlayCircleLine,
+  RiGithubFill,
+  RiSendPlaneFill,
 } from "react-icons/ri";
 import { toast } from "react-toastify";
 import {
@@ -46,6 +52,11 @@ import {
   deleteTask,
   extractWbsCode,
 } from "../app/_local_store";
+import {
+  executeWbsTaskStream,
+  executeWbsWave,
+  sendDevelopmentInstructionStream,
+} from "../app/_boba_api";
 import MarkdownRenderer from "../app/_markdown_renderer";
 
 const COLUMNS = [
@@ -102,6 +113,24 @@ export default function TasksPage() {
   const [filterCriticalOnly, setFilterCriticalOnly] = useState(false);
   const [selectedWave, setSelectedWave] = useState("ALL");
   const [pendingMove, setPendingMove] = useState(null);
+
+  // WBS Sandbox Code Execution States
+  const [execModalVisible, setExecModalVisible] = useState(false);
+  const [executingTask, setExecutingTask] = useState(null);
+  const [execLogs, setExecLogs] = useState("");
+  const [execLoading, setExecLoading] = useState(false);
+  const [execResult, setExecResult] = useState(null);
+  const [execFollowUp, setExecFollowUp] = useState("");
+  const [isSendingExecInstruction, setIsSendingExecInstruction] = useState(false);
+  const [isRunningWave, setIsRunningWave] = useState(false);
+  const execLogsContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (execLogsContainerRef.current) {
+      execLogsContainerRef.current.scrollTop =
+        execLogsContainerRef.current.scrollHeight;
+    }
+  }, [execLogs]);
 
   const selectedTask = useMemo(() => {
     if (!selectedTaskId) return null;
@@ -349,6 +378,159 @@ export default function TasksPage() {
       setSelectedTaskId(null);
     }
     toast.success("Task deleted");
+  };
+
+  const handleExecuteTask = (task) => {
+    setExecutingTask(task);
+    setExecModalVisible(true);
+    setExecLoading(true);
+    setExecResult(null);
+    setExecLogs(
+      `Initializing sandbox execution for [${task.wbsCode || "WBS"}] ${task.title}...\n`,
+    );
+
+    const proj = getActiveProject();
+    const githubConf = proj?.github?.repoUrl ? proj.github : null;
+
+    const payload = {
+      wbs_code: task.wbsCode || extractWbsCode(task.title),
+      title: task.title,
+      task_id: task.id,
+      summary: task.summary || "",
+      pbs_deliverable_ref: task.pbsDeliverableRef || "",
+      pdp_stage_ref: task.pdpStageRef || "",
+      dependencies: task.dependencies || [],
+      project_id: proj?.id,
+      github_config: githubConf,
+    };
+
+    executeWbsTaskStream(
+      payload,
+      (logChunk) => {
+        setExecLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setExecResult(result);
+        setExecLoading(false);
+        if (result && result.logs && result.logs.length > execLogs.length) {
+          setExecLogs(result.logs);
+        }
+        if (result && result.success) {
+          toast.success(
+            result.pr_info?.html_url
+              ? `Task verified against DoD & Pull Request #${result.pr_info.number} created!`
+              : "Task automated tests passed cleanly in Sandbox!",
+          );
+          updateTask(
+            task.id,
+            {
+              status: "needs_review",
+              execution: {
+                status: "success",
+                branch: result.feature_branch,
+                pr_url: result.pr_info?.html_url,
+                pr_number: result.pr_info?.number,
+                tests_passed: true,
+                updated_at: Date.now(),
+              },
+            },
+            proj?.id,
+          );
+          setTasks(getProjectTasks(proj?.id));
+        } else {
+          toast.error("Task execution completed with errors.");
+          updateTask(
+            task.id,
+            {
+              execution: {
+                status: "failed",
+                branch: result?.feature_branch,
+                tests_passed: false,
+                updated_at: Date.now(),
+              },
+            },
+            proj?.id,
+          );
+          setTasks(getProjectTasks(proj?.id));
+        }
+      },
+      (err) => {
+        setExecLoading(false);
+        setExecResult({
+          success: false,
+          error: err.message,
+        });
+        setExecLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`Execution error: ${err.message}`);
+      },
+    );
+  };
+
+  const handleSendExecInstruction = async () => {
+    if (
+      !execFollowUp.trim() ||
+      !execResult ||
+      !execResult.sandbox_id ||
+      isSendingExecInstruction ||
+      execLoading
+    ) {
+      return;
+    }
+    const promptToSend = execFollowUp.trim();
+    setExecFollowUp("");
+    setIsSendingExecInstruction(true);
+
+    const marker = `\n\n========================================\n>>> User Instruction: ${promptToSend}\n========================================\n`;
+    setExecLogs((prev) => prev + marker);
+
+    sendDevelopmentInstructionStream(
+      execResult.sandbox_id,
+      promptToSend,
+      (logChunk) => {
+        setExecLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setIsSendingExecInstruction(false);
+        if (result) {
+          setExecResult((prev) => ({
+            ...prev,
+            ...result,
+          }));
+          if (result.logs && result.logs.length > execLogs.length) {
+            setExecLogs(result.logs);
+          }
+        }
+        toast.success("Instruction executed in sandbox!");
+      },
+      (err) => {
+        setIsSendingExecInstruction(false);
+        setExecLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`Instruction error: ${err.message}`);
+      },
+    );
+  };
+
+  const handleRunSelectedWave = async () => {
+    if (selectedWave === "ALL") return;
+    setIsRunningWave(true);
+    const proj = getActiveProject();
+    try {
+      toast.info(`Launching parallel wave execution for "${selectedWave}"...`);
+      const res = await executeWbsWave({
+        wave_name: selectedWave,
+        project_id: proj?.id,
+        tasks: tasks,
+        max_workers: 3,
+      });
+      toast.success(
+        `Wave "${selectedWave}" completed: ${res.successful_tasks}/${res.total_tasks} tasks verified!`,
+      );
+      setTasks(getProjectTasks(proj?.id));
+    } catch (err) {
+      toast.error(`Wave execution failed: ${err.message}`);
+    } finally {
+      setIsRunningWave(false);
+    }
   };
 
   const openAddModal = () => {
@@ -602,6 +784,17 @@ export default function TasksPage() {
                 ...availableWaves.map((w) => ({ label: `🌊 ${w}`, value: w })),
               ]}
             />
+          )}
+          {availableWaves.length > 0 && selectedWave !== "ALL" && (
+            <Button
+              type="primary"
+              icon={<RiPlayCircleLine />}
+              onClick={handleRunSelectedWave}
+              loading={isRunningWave}
+              style={{ background: "#722ed1", borderColor: "#722ed1" }}
+            >
+              Run Wave
+            </Button>
           )}
           <Button
             type={filterHitlOnly ? "primary" : "default"}
@@ -866,6 +1059,13 @@ export default function TasksPage() {
                                   },
                                   { type: "divider" },
                                   {
+                                    key: "execute_sandbox",
+                                    icon: <RiCodeBoxLine style={{ color: "#722ed1" }} />,
+                                    label: "Execute in Sandbox",
+                                    onClick: () => handleExecuteTask(task),
+                                  },
+                                  { type: "divider" },
+                                  {
                                     key: "edit",
                                     icon: <RiEditLine />,
                                     label: "Edit Task",
@@ -1013,6 +1213,60 @@ export default function TasksPage() {
                             </div>
                           ) : null)}
 
+                        {/* Execution Status / GitHub PR link */}
+                        {task.execution && (
+                          <div
+                            style={{
+                              marginBottom: "8px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            {task.execution.issue_url && (
+                              <a
+                                href={task.execution.issue_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Tag
+                                  color="geekblue"
+                                  icon={<RiGithubFill />}
+                                  style={{ cursor: "pointer", margin: 0, fontWeight: 500 }}
+                                >
+                                  Issue #{task.execution.issue_number}
+                                </Tag>
+                              </a>
+                            )}
+                            {task.execution.pr_url ? (
+                              <a
+                                href={task.execution.pr_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Tag
+                                  color="green"
+                                  icon={<RiGithubFill />}
+                                  style={{ cursor: "pointer", margin: 0, fontWeight: 600 }}
+                                >
+                                  PR #{task.execution.pr_number || "Open"}
+                                </Tag>
+                              </a>
+                            ) : task.execution.status === "failed" ? (
+                              <Tag color="red" style={{ margin: 0 }}>
+                                Tests Failed
+                              </Tag>
+                            ) : task.execution.status === "success" ? (
+                              <Tag color="blue" style={{ margin: 0 }}>
+                                DoD Verified
+                              </Tag>
+                            ) : null}
+                          </div>
+                        )}
+
                         {/* Footer Info */}
                         <div
                           style={{
@@ -1050,22 +1304,42 @@ export default function TasksPage() {
                               </Tag>
                             )}
                           </Space>
-                          <Button
-                            type="link"
-                            size="small"
-                            style={{
-                              padding: 0,
-                              fontSize: "0.75rem",
-                              height: "auto",
-                            }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTaskId(task.id);
-                              setIsDetailDrawerOpen(true);
-                            }}
-                          >
-                            View Details
-                          </Button>
+                          <Space size={4}>
+                            <Button
+                              type="primary"
+                              size="small"
+                              icon={<RiPlayCircleLine />}
+                              style={{
+                                padding: "0 8px",
+                                fontSize: "0.72rem",
+                                height: "22px",
+                                background: "#722ed1",
+                                borderColor: "#722ed1",
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleExecuteTask(task);
+                              }}
+                            >
+                              Execute
+                            </Button>
+                            <Button
+                              type="link"
+                              size="small"
+                              style={{
+                                padding: 0,
+                                fontSize: "0.75rem",
+                                height: "auto",
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedTaskId(task.id);
+                                setIsDetailDrawerOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                          </Space>
                         </div>
                       </Card>
                     );
@@ -1109,6 +1383,14 @@ export default function TasksPage() {
         destroyOnClose={true}
         extra={
           <Space>
+            <Button
+              type="primary"
+              icon={<RiPlayCircleLine />}
+              style={{ background: "#722ed1", borderColor: "#722ed1" }}
+              onClick={() => handleExecuteTask(selectedTask)}
+            >
+              Execute in Sandbox
+            </Button>
             <Button
               icon={<RiEditLine />}
               onClick={() => openEditModal(selectedTask)}
@@ -1902,6 +2184,180 @@ export default function TasksPage() {
             </p>
           </div>
         )}
+      </Modal>
+
+      {/* WBS Sandbox Code Execution Modal */}
+      <Modal
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <RiCodeBoxLine style={{ color: "#722ed1", fontSize: "1.2rem" }} />
+            <span>
+              WBS Code Execution:{" "}
+              {executingTask?.title || "Task"}
+            </span>
+            {execLoading && <Spin size="small" />}
+          </div>
+        }
+        open={execModalVisible}
+        onCancel={() => setExecModalVisible(false)}
+        footer={null}
+        width={820}
+        destroyOnClose
+      >
+        <div style={{ marginTop: "12px" }}>
+          {execResult && (
+            <div style={{ marginBottom: "16px" }}>
+              <Space wrap style={{ marginBottom: "8px" }}>
+                <Tag color={execResult.success ? "success" : "error"}>
+                  {execResult.success
+                    ? "DoD VERIFIED & TESTS PASSED"
+                    : "TESTS / BUILD FAILED"}
+                </Tag>
+                {execResult.feature_branch && (
+                  <Tag color="purple">Branch: {execResult.feature_branch}</Tag>
+                )}
+                {execResult.sandbox_id && (
+                  <Tag>Sandbox: {execResult.sandbox_id}</Tag>
+                )}
+              </Space>
+
+              {execResult.pr_info?.html_url && (
+                <Alert
+                  type="success"
+                  showIcon
+                  message="Pull Request Created Successfully"
+                  description={
+                    <div style={{ marginTop: "8px" }}>
+                      <p style={{ margin: "0 0 8px 0" }}>
+                        The AI agent verified tests against the Definition of Done (DoD)
+                        and submitted a Draft Pull Request.
+                      </p>
+                      <Space wrap>
+                        {execResult.issue_info?.html_url && (
+                          <Button
+                            icon={<RiGithubFill />}
+                            href={execResult.issue_info.html_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            View Issue #{execResult.issue_info.number}
+                          </Button>
+                        )}
+                        <Button
+                          type="primary"
+                          icon={<RiGithubFill />}
+                          href={execResult.pr_info.html_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ background: "#24292f" }}
+                        >
+                          View Pull Request #{execResult.pr_info.number}
+                        </Button>
+                      </Space>
+                    </div>
+                  }
+                  style={{ marginBottom: "12px" }}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Interactive instruction to agent in sandbox */}
+          {execResult && execResult.sandbox_id && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                background: "#f9fafb",
+                borderRadius: "6px",
+                border: "1px solid #e5e7eb",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                }}
+              >
+                <span style={{ fontSize: "12px", fontWeight: 600, color: "#374151" }}>
+                  Interactive Follow-up Prompt to Sandbox:
+                </span>
+                {isSendingExecInstruction && (
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#722ed1",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <Spin size="small" /> Agent executing instruction...
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <Input
+                  placeholder="Send instructions to agent (e.g., 'Fix edge case in test', 'Update DDL column')..."
+                  value={execFollowUp}
+                  onChange={(e) => setExecFollowUp(e.target.value)}
+                  onPressEnter={handleSendExecInstruction}
+                  disabled={isSendingExecInstruction || execLoading}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  type="primary"
+                  icon={<RiSendPlaneFill />}
+                  loading={isSendingExecInstruction}
+                  disabled={!execFollowUp.trim() || execLoading}
+                  onClick={handleSendExecInstruction}
+                  style={{ background: "#722ed1", borderColor: "#722ed1" }}
+                >
+                  Send
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "6px",
+              }}
+            >
+              <h4 style={{ margin: 0 }}>
+                {execLoading ? "Live Execution & Test Logs:" : "Execution & Test Logs:"}
+              </h4>
+              {execLoading && (
+                <span style={{ fontSize: "12px", color: "#722ed1" }}>
+                  Streaming output from Sandbox & Pi Agent...
+                </span>
+              )}
+            </div>
+            <pre
+              ref={execLogsContainerRef}
+              style={{
+                backgroundColor: "#0d1117",
+                color: "#58a6ff",
+                padding: "12px",
+                borderRadius: "6px",
+                maxHeight: "340px",
+                overflowY: "auto",
+                fontSize: "12px",
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {execLogs || "Initializing execution..."}
+            </pre>
+          </div>
+        </div>
       </Modal>
     </div>
   );

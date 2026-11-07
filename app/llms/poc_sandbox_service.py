@@ -347,8 +347,26 @@ class PocSandboxService:
             log(
                 "Configuring Node.js 22+ & Pi coding agent (@earendil-works/pi-coding-agent)..."
             )
+            setup_script = (
+                "bash -c '"
+                "export PATH=/usr/local/bin:$PATH; "
+                "NODE_VER=$(node -v 2>/dev/null || echo \"none\"); "
+                "NODE_MAJOR=$(echo \"$NODE_VER\" | cut -d. -f1 | tr -d v); "
+                "if [ \"$NODE_MAJOR\" -lt 22 ] 2>/dev/null || ! command -v node >/dev/null 2>&1; then "
+                "  echo \"Current Node.js version ($NODE_VER) is below v22, upgrading...\"; "
+                "  (sudo npm install -g n 2>/dev/null || npm install -g n 2>/dev/null) && (sudo n 22 2>/dev/null || n 22) && "
+                "  (sudo ln -sf /usr/local/bin/node /usr/bin/node 2>/dev/null || true); "
+                "fi; "
+                "if [ -f /usr/local/bin/node ]; then sudo ln -sf /usr/local/bin/node /usr/bin/node 2>/dev/null || true; fi; "
+                "ACTIVE_NODE=$(node -v 2>/dev/null); "
+                "echo \"Active Node.js: $ACTIVE_NODE\"; "
+                "if ! command -v pi >/dev/null 2>&1; then "
+                "  echo \"Installing @earendil-works/pi-coding-agent...\"; "
+                "  sudo npm install -g @earendil-works/pi-coding-agent 2>/dev/null || npm install -g @earendil-works/pi-coding-agent; "
+                "fi'"
+            )
             setup_cmd = sandbox.run_command(
-                "node -v | grep -q 'v22' || (npm install -g n && n 22) && (which pi || npm install -g @earendil-works/pi-coding-agent)",
+                setup_script,
                 timeout=300,
                 on_stdout=lambda text: log(text),
                 on_stderr=lambda text: log(text),
@@ -359,6 +377,7 @@ class PocSandboxService:
             # 2. Run Pi non-interactively with Google Gemini
             model_name = os.environ.get("ENABLED_CHAT_MODEL") or "gemini-3.8-flash"
             pi_command = (
+                "export PATH=/usr/local/bin:$PATH && "
                 "cd /home/user/app && "
                 f"pi --provider google --model {model_name} "
                 "--mode json -p "
