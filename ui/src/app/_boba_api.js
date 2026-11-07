@@ -402,3 +402,142 @@ export const stopPocPreview = async (sandboxId, onSuccess, onError) => {
     if (onError) onError(error);
   }
 };
+
+export const getDevelopmentStatus = async () => {
+  const response = await fetch("/api/development/status", {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch development status: ${response.status}`);
+  }
+  return await response.json();
+};
+
+export const executeWbsTaskStream = async (payload, onChunk, onFinish, onError) => {
+  try {
+    const response = await fetch("/api/development/execute-task?stream=true", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const item = JSON.parse(line.trim());
+          if (item.type === "log") {
+            onChunk(item.message);
+          } else if (item.type === "result") {
+            onFinish(item.data);
+          } else if (item.type === "error") {
+            onError(new Error(item.message));
+          }
+        } catch (e) {
+          onChunk(line);
+        }
+      }
+    }
+  } catch (error) {
+    if (onError) onError(error);
+  }
+};
+
+export const executeWbsWave = async (payload) => {
+  const response = await fetch("/api/development/execute-wave", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+  }
+  return await response.json();
+};
+
+export const sendDevelopmentInstructionStream = async (
+  sandboxId,
+  prompt,
+  onChunk,
+  onFinish,
+  onError,
+) => {
+  try {
+    const response = await fetch("/api/development/instruction?stream=true", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ sandbox_id: sandboxId, prompt }),
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const item = JSON.parse(line.trim());
+          if (item.type === "log") {
+            onChunk(item.message);
+          } else if (item.type === "result") {
+            onFinish(item.data);
+          } else if (item.type === "error") {
+            onError(new Error(item.message));
+          }
+        } catch (e) {
+          onChunk(line);
+        }
+      }
+    }
+  } catch (error) {
+    if (onError) onError(error);
+  }
+};
+
+export const stopDevelopmentSandbox = async (sandboxId) => {
+  const response = await fetch(`/api/development/sandbox/${sandboxId}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  return await response.json();
+};

@@ -1,5 +1,11 @@
 // © 2024 Thoughtworks, Inc. | Licensed under the Apache License, Version 2.0  | See LICENSE.md file for permissions.
-import { addToPinboard, getActiveProject } from "../app/_local_store";
+import {
+  addToPinboard,
+  getActiveProject,
+  getProjectTasks,
+  updateTask,
+  extractWbsCode,
+} from "../app/_local_store";
 import {
   RiFileCopyLine,
   RiChat2Line,
@@ -12,6 +18,8 @@ import {
   RiDownload2Line,
   RiSendPlaneFill,
   RiGithubFill,
+  RiCodeBoxLine,
+  RiGitPullRequestLine,
 } from "react-icons/ri";
 import {
   Button,
@@ -30,6 +38,9 @@ import {
   executePocSpikeStream,
   stopPocPreview,
   sendPocInstructionStream,
+  executeWbsTaskStream,
+  sendDevelopmentInstructionStream,
+  stopDevelopmentSandbox,
 } from "./_boba_api";
 import React, { useState, useRef, useEffect } from "react";
 
@@ -104,6 +115,16 @@ export default function CardActions({
         scenario.title.startsWith("IMPL-"))),
   );
 
+  const isWbsCard = Boolean(
+    scenario &&
+    (scenario.wbs_code ||
+      scenario.wbsCode ||
+      scenario.dependencies !== undefined ||
+      scenario.parallel_group ||
+      (typeof scenario.title === "string" &&
+        (scenario.title.startsWith("WBS") || scenario.title.startsWith("WBS-")))),
+  );
+
   const isExecutableScenario = Boolean(
     scenario &&
     (scenario.title ||
@@ -114,6 +135,159 @@ export default function CardActions({
       scenario.module_type ||
       scenario.target_files),
   );
+
+  const [wbsModalVisible, setWbsModalVisible] = useState(false);
+  const [wbsLoading, setWbsLoading] = useState(false);
+  const [wbsResult, setWbsResult] = useState(null);
+  const [wbsLogs, setWbsLogs] = useState("");
+  const [wbsFollowUpPrompt, setWbsFollowUpPrompt] = useState("");
+  const [isSendingWbsInstruction, setIsSendingWbsInstruction] = useState(false);
+  const wbsLogsContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (wbsLogsContainerRef.current) {
+      wbsLogsContainerRef.current.scrollTop =
+        wbsLogsContainerRef.current.scrollHeight;
+    }
+  }, [wbsLogs]);
+
+  const handleRunWbsTask = () => {
+    setWbsModalVisible(true);
+    setWbsLoading(true);
+    setWbsResult(null);
+    setWbsLogs("Provisioning Sandbox & configuring Pi Coding Agent...\n");
+
+    const activeProj = getActiveProject();
+    const githubConf = activeProj?.github?.repoUrl ? activeProj.github : null;
+    const wbsCode =
+      scenario.wbs_code ||
+      scenario.wbsCode ||
+      extractWbsCode(scenario.title);
+
+    const runtime =
+      scenario.runtime ||
+      (scenario.summary &&
+      scenario.summary.toLowerCase().includes("python")
+        ? "python"
+        : "node") ||
+      "node";
+
+    const payload = {
+      wbs_code: wbsCode,
+      title: scenario.title || "WBS Task",
+      task_id: scenario.id || null,
+      summary: scenario.summary || scenarioToText(scenario),
+      pbs_deliverable_ref:
+        scenario.pbs_deliverable_ref || scenario.pbsDeliverableRef || "",
+      pdp_stage_ref: scenario.pdp_stage_ref || scenario.pdpStageRef || "",
+      dependencies: scenario.dependencies || [],
+      runtime: runtime,
+      project_id: activeProj?.id,
+      github_config: githubConf,
+    };
+
+    executeWbsTaskStream(
+      payload,
+      (logChunk) => {
+        setWbsLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setWbsResult(result);
+        setWbsLoading(false);
+        if (result && result.logs && result.logs.length > wbsLogs.length) {
+          setWbsLogs(result.logs);
+        }
+        if (result && result.success) {
+          toast.success(
+            result.pr_info?.html_url
+              ? `WBS Task completed & Pull Request #${result.pr_info.number} created!`
+              : "WBS Task tests passed successfully in Sandbox!",
+          );
+          if (activeProj?.id) {
+            const currentTasks = getProjectTasks(activeProj.id);
+            const matched = currentTasks.find(
+              (t) =>
+                (wbsCode && t.wbsCode === wbsCode) ||
+                t.title === scenario.title,
+            );
+            if (matched) {
+              updateTask(
+                matched.id,
+                {
+                  status: "needs_review",
+                  execution: {
+                    status: "success",
+                    branch: result.feature_branch,
+                    pr_url: result.pr_info?.html_url,
+                    pr_number: result.pr_info?.number,
+                    tests_passed: true,
+                    updated_at: Date.now(),
+                  },
+                },
+                activeProj.id,
+              );
+            }
+          }
+        } else {
+          toast.error("WBS Task execution completed with test or build errors.");
+        }
+      },
+      (err) => {
+        setWbsLoading(false);
+        setWbsResult({
+          success: false,
+          error: err.message,
+          summary: "Failed to execute WBS task.",
+        });
+        setWbsLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`WBS execution failed: ${err.message}`);
+      },
+    );
+  };
+
+  const handleSendWbsInstruction = async () => {
+    if (
+      !wbsFollowUpPrompt.trim() ||
+      !wbsResult ||
+      !wbsResult.sandbox_id ||
+      isSendingWbsInstruction ||
+      wbsLoading
+    ) {
+      return;
+    }
+    const promptToSend = wbsFollowUpPrompt.trim();
+    setWbsFollowUpPrompt("");
+    setIsSendingWbsInstruction(true);
+
+    const marker = `\n\n========================================\n>>> User Instruction: ${promptToSend}\n========================================\n`;
+    setWbsLogs((prev) => prev + marker);
+
+    sendDevelopmentInstructionStream(
+      wbsResult.sandbox_id,
+      promptToSend,
+      (logChunk) => {
+        setWbsLogs((prev) => prev + logChunk);
+      },
+      (result) => {
+        setIsSendingWbsInstruction(false);
+        if (result) {
+          setWbsResult((prev) => ({
+            ...prev,
+            ...result,
+          }));
+          if (result.logs && result.logs.length > wbsLogs.length) {
+            setWbsLogs(result.logs);
+          }
+        }
+        toast.success("Instruction executed in sandbox!");
+      },
+      (err) => {
+        setIsSendingWbsInstruction(false);
+        setWbsLogs((prev) => prev + `\n[ERROR]: ${err.message}\n`);
+        toast.error(`Instruction error: ${err.message}`);
+      },
+    );
+  };
 
   const handleRunPoc = () => {
     setPocModalVisible(true);
@@ -266,7 +440,22 @@ export default function CardActions({
               </Button>
             </Tooltip>
           )}
-          {isExecutableScenario && (
+          {isWbsCard && (
+            <Tooltip
+              title="Execute WBS Task (Code Development with DoD Tests)"
+              key="wbs-dev"
+            >
+              <Button
+                type="link"
+                aria-label="Execute WBS Task"
+                onClick={handleRunWbsTask}
+                style={{ color: "#722ed1", paddingRight: "4px" }}
+              >
+                <RiCodeBoxLine fontSize="large" />
+              </Button>
+            </Tooltip>
+          )}
+          {!isWbsCard && isExecutableScenario && (
             <Tooltip
               title={
                 isImplementationCard
@@ -550,6 +739,180 @@ export default function CardActions({
               }}
             >
               {pocLogs || "Starting execution..."}
+            </pre>
+          </div>
+        </div>
+      </Modal>
+
+      {/* WBS Code Development Execution Modal */}
+      <Modal
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <RiCodeBoxLine style={{ color: "#722ed1", fontSize: "1.2rem" }} />
+            <span>
+              WBS Code Development:{" "}
+              {scenario.title || (scenario.wbs_code ? `WBS ${scenario.wbs_code}` : "Task")}
+            </span>
+            {wbsLoading && <Spin size="small" />}
+          </div>
+        }
+        open={wbsModalVisible}
+        onCancel={() => setWbsModalVisible(false)}
+        footer={null}
+        width={800}
+        destroyOnClose
+      >
+        <div style={{ marginTop: "12px" }}>
+          {wbsResult && (
+            <div style={{ marginBottom: "16px" }}>
+              <Space wrap style={{ marginBottom: "8px" }}>
+                <Tag color={wbsResult.success ? "success" : "error"}>
+                  {wbsResult.success
+                    ? "DoD VERIFIED & TESTS PASSED"
+                    : "TESTS / BUILD FAILED"}
+                </Tag>
+                {wbsResult.feature_branch && (
+                  <Tag color="purple">Branch: {wbsResult.feature_branch}</Tag>
+                )}
+                {wbsResult.sandbox_id && (
+                  <Tag>Sandbox: {wbsResult.sandbox_id}</Tag>
+                )}
+              </Space>
+
+              {wbsResult.pr_info?.html_url && (
+                <Alert
+                  type="success"
+                  showIcon
+                  message="Pull Request Created Successfully"
+                  description={
+                    <div style={{ marginTop: "8px" }}>
+                      <p style={{ margin: "0 0 8px 0" }}>
+                        The AI agent verified tests against the Definition of Done (DoD)
+                        and submitted a Draft Pull Request.
+                      </p>
+                      <Space wrap>
+                        {wbsResult.issue_info?.html_url && (
+                          <Button
+                            icon={<RiGithubFill />}
+                            href={wbsResult.issue_info.html_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            View Issue #{wbsResult.issue_info.number}
+                          </Button>
+                        )}
+                        <Button
+                          type="primary"
+                          icon={<RiGithubFill />}
+                          href={wbsResult.pr_info.html_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ background: "#24292f" }}
+                        >
+                          View Pull Request #{wbsResult.pr_info.number}
+                        </Button>
+                      </Space>
+                    </div>
+                  }
+                  style={{ marginBottom: "12px" }}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Follow-up Interactive Agent Instruction */}
+          {wbsResult && wbsResult.sandbox_id && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                background: "#f9fafb",
+                borderRadius: "6px",
+                border: "1px solid #e5e7eb",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                }}
+              >
+                <span style={{ fontSize: "12px", fontWeight: 600, color: "#374151" }}>
+                  Interactive Follow-up Prompt to Sandbox:
+                </span>
+                {isSendingWbsInstruction && (
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#722ed1",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <Spin size="small" /> Agent working on instruction...
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <Input
+                  placeholder="Send instructions to agent (e.g., 'Fix the edge case in auth test', 'Refactor query')..."
+                  value={wbsFollowUpPrompt}
+                  onChange={(e) => setWbsFollowUpPrompt(e.target.value)}
+                  onPressEnter={handleSendWbsInstruction}
+                  disabled={isSendingWbsInstruction || wbsLoading}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  type="primary"
+                  icon={<RiSendPlaneFill />}
+                  loading={isSendingWbsInstruction}
+                  disabled={!wbsFollowUpPrompt.trim() || wbsLoading}
+                  onClick={handleSendWbsInstruction}
+                  style={{ background: "#722ed1", borderColor: "#722ed1" }}
+                >
+                  Send
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "6px",
+              }}
+            >
+              <h4 style={{ margin: 0 }}>
+                {wbsLoading ? "Live Execution & Test Logs:" : "Execution & Test Logs:"}
+              </h4>
+              {wbsLoading && (
+                <span style={{ fontSize: "12px", color: "#722ed1" }}>
+                  Streaming output from Sandbox & Pi Agent...
+                </span>
+              )}
+            </div>
+            <pre
+              ref={wbsLogsContainerRef}
+              style={{
+                backgroundColor: "#0d1117",
+                color: "#58a6ff",
+                padding: "12px",
+                borderRadius: "6px",
+                maxHeight: "340px",
+                overflowY: "auto",
+                fontSize: "12px",
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {wbsLogs || "Initializing execution..."}
             </pre>
           </div>
         </div>
